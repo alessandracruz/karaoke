@@ -1,0 +1,36 @@
+/* base.css */
+:root{
+  /* Grafite / dark */
+  --bg: #0b0f14;
+  --panel: rgba(255,255,255,.06);
+  --panel-2: rgba(255,255,255,.08);
+  --border: rgba(255,255,255,.10);
+  --text: rgba(255,255,255,.90);
+  --muted: rgba(255,255,255,.60);
+
+  /* Âmbar */
+  --accent: #f5b23a;
+  --accent-2: #d89a2e;
+
+  /* Estados */
+  --ok: #3ddc97;
+  --err: #ff5d5d;
+
+  --radius: 16px;
+  --shadow: 0 18px 60px rgba(0,0,0,.45);
+}
+
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+
+body{
+  margin:0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  color: var(--text);
+  background: radial-gradient(1200px 800px at 50% 15%, rgba(245,178,58,.10), transparent 55%),
+              radial-gradient(900px 700px at 15% 70%, rgba(255,255,255,.05), transparent 60%),
+              var(--bg);
+}
+
+a{ color: inherit; }
+button, input, textarea{ font: inherit; }

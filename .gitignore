@@ -1,3 +1,6 @@
+# arquivos gerados localmente
+library.json
+songs/
 .venv/
 __pycache__/
 *.pyc
