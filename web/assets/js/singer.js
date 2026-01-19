@@ -32,6 +32,8 @@
     setHidden(els.playing, true);
   }
 
+
+
   function renderPlaying(data) {
     // data: { title, artist, currentLine, nextLines[] }
     if (!data) return;
@@ -57,6 +59,20 @@
   function init() {
     // Default state (v1)
     renderStandby();
+
+    const DEV_PREVIEW = true;
+    if (DEV_PREVIEW) {
+        renderPlaying({
+        title: "Evidências",
+        artist: "Chitãozinho & Xororó",
+        currentLine: "E nessa loucura de dizer que não te quero...",
+        nextLines: [
+            "Vou negando as aparências",
+            "Disfarçando as evidências",
+            "Mas pra que viver fingindo?",
+        ],
+        });
+    }
 
     // Expose minimal API for future polling integration (v1)
     window.KaraokeSinger = {
