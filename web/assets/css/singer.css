@@ -1,4 +1,12 @@
-.stage{ margin-top: 18px; min-height: 70vh; }
+/* singer.css */
+.stage{
+  margin-top: 18px;
+  min-height: 70vh;
+
+  /* Opcional (performance): isola repaint/layout do palco */
+  /* contain: layout paint; */
+}
+
 .center{
   display:flex;
   flex-direction:column;
@@ -7,4 +15,6 @@
   gap: 16px;
   padding: 46px 16px;
 }
+
 .hint{ color: var(--muted); }
+

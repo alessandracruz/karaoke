@@ -1,25 +1,42 @@
-/* base.css */
+/* web/assets/css/base.css */
 :root{
-  /* Grafite / dark */
-  --bg: #0b0f14;
+  /* ========= TOKENS (performance-first) ========= */
+  /* Cores (grafite + ambar) */
+  --bg: #0b0f14;                 /* background */
+  --surface: #121826;            /* surface/cards */
   --panel: rgba(255,255,255,.06);
   --panel-2: rgba(255,255,255,.08);
   --border: rgba(255,255,255,.10);
+
   --text: rgba(255,255,255,.90);
   --muted: rgba(255,255,255,.60);
 
-  /* Âmbar */
   --accent: #f5b23a;
   --accent-2: #d89a2e;
 
   /* Estados */
   --ok: #3ddc97;
+  --warn: #f5b23a;
   --err: #ff5d5d;
 
+  /* Espaçamentos */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Radius */
   --radius: 16px;
-  --shadow: 0 18px 60px rgba(0,0,0,.45);
+  --radius-sm: 10px;
+
+  /* Shadows (LEVE por padrão) */
+  --shadow: 0 8px 20px rgba(0,0,0,.30);
+  /* Alternativa ultra leve (se precisar):  --shadow: none; */
 }
 
+/* ========= RESETS MINIMOS ========= */
 *{ box-sizing:border-box; }
 html,body{ height:100%; }
 
@@ -27,10 +44,179 @@ body{
   margin:0;
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   color: var(--text);
-  background: radial-gradient(1200px 800px at 50% 15%, rgba(245,178,58,.10), transparent 55%),
-              radial-gradient(900px 700px at 15% 70%, rgba(255,255,255,.05), transparent 60%),
-              var(--bg);
+  background: var(--bg); /* default leve (sem gradients) */
 }
 
-a{ color: inherit; }
+a{ color: inherit; text-decoration: none; }
 button, input, textarea{ font: inherit; }
+
+/* Reduz custo em máquinas fracas / acessibilidade */
+@media (prefers-reduced-motion: reduce){
+  *{ transition: none !important; animation: none !important; }
+}
+
+/* Opcional: “glow” MAIS PESADO só se quiser (não default) */
+.bg-ambient{
+  background:
+    radial-gradient(1200px 800px at 50% 15%, rgba(245,178,58,.10), transparent 55%),
+    radial-gradient(900px 700px at 15% 70%, rgba(255,255,255,.05), transparent 60%),
+    var(--bg);
+}
+
+/* ========= UTILITARIOS ========= */
+.container{
+  width: min(1100px, calc(100% - 2*var(--space-6)));
+  margin: 0 auto;
+  padding: var(--space-6) 0;
+}
+
+.stack{ display:flex; flex-direction:column; gap: var(--space-4); }
+.row{ display:flex; gap: var(--space-2); align-items:center; flex-wrap: wrap; }
+.meta{ color: var(--muted); font-size: .95rem; }
+
+/* ========= LAYOUT / BLOCOS ========= */
+.topbar{
+  display:flex;
+  justify-content: space-between;
+  align-items:center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.brand{
+  font-weight: 700;
+  letter-spacing: .2px;
+  display:flex;
+  align-items:center;
+  gap: 10px;
+}
+
+.brand .dot{
+  width: 10px; height: 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  /* leve: sem glow extra por padrão */
+}
+
+.panel{
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow:hidden;
+}
+
+.panel-h{
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  font-weight: 700;
+}
+
+.panel-b{ padding: var(--space-6); }
+
+/* ========= COMPONENTES ========= */
+.btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.02);
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  /* transições leves (ok); serão desativadas em prefers-reduced-motion */
+  transition: transform .08s ease, background .15s ease, border-color .15s ease, opacity .15s ease;
+}
+
+.btn:hover{ background: rgba(255,255,255,.04); }
+.btn:active{ transform: translateY(1px); }
+
+.btn:disabled{
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.btn-accent{
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  border-color: rgba(0,0,0,.25);
+  color: #0b0f14;
+  font-weight: 800;
+}
+
+.btn-accent:hover{
+  /* leve (sem filter): só pequena variação de opacidade */
+  opacity: .96;
+}
+
+.input, textarea, input[type="text"]{
+  background: rgba(255,255,255,.03);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  outline: none;
+}
+
+.input:focus, textarea:focus, input[type="text"]:focus{
+  border-color: rgba(245,178,58,.45);
+}
+
+.card{
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.03);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+}
+
+.badge{
+  display:inline-flex;
+  align-items:center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: .85rem;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.02);
+}
+
+.badge.ok{ border-color: rgba(61,220,151,.35); }
+.badge.err{ border-color: rgba(255,93,93,.35); }
+.badge.warn{ border-color: rgba(245,178,58,.35); }
+
+/* ============================================================
+   MODO MAIS BONITO (descomente se o Celeron aguentar bem)
+   - gradients no fundo
+   - sombra mais forte
+   - glow no dot
+   ============================================================ */
+
+/*
+:root{
+  --shadow: 0 18px 60px rgba(0,0,0,.45);
+}
+
+body{
+  background:
+    radial-gradient(1200px 800px at 50% 15%, rgba(245,178,58,.10), transparent 55%),
+    radial-gradient(900px 700px at 15% 70%, rgba(255,255,255,.05), transparent 60%),
+    var(--bg);
+}
+
+.brand .dot{
+  box-shadow: 0 0 0 3px rgba(245,178,58,.18);
+}
+
+.btn-accent:hover{
+  opacity: 1;
+}
+*/
+
+

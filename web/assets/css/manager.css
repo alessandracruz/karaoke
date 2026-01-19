@@ -24,7 +24,7 @@
   letter-spacing:.2px;
 }
 
-/* “Tabs” atuais (Search / Bulk) — mantém funcionando, mas com tema */
+/* “Tabs” atuais (Search / Bulk) */
 .tabs{
   margin-top: 14px;
   display:flex;
@@ -53,7 +53,7 @@
 }
 .content.active{ display:block; }
 
-/* Search view: transforma em “Catálogo” + “Preview/Import” sem mexer no JS */
+/* Search view */
 .search-container{
   border: 1px solid var(--border);
   background: var(--panel);
@@ -109,6 +109,9 @@
   border-radius: var(--radius);
   overflow: hidden;
   min-height: 360px;
+
+  /* Opcional (performance): limita repaint/layout em listas grandes */
+  /* contain: layout paint; */
 }
 
 /* itens do catálogo */
@@ -117,9 +120,11 @@
   border-bottom: 1px solid rgba(255,255,255,.06);
   cursor:pointer;
 }
+
 .result-item:hover{
   background: rgba(255,255,255,.04);
 }
+
 .result-info div:first-child{ font-weight: 650; }
 .result-info div:last-child{ color: var(--muted); font-size: 13px; }
 
@@ -129,6 +134,9 @@
   background: rgba(0,0,0,.18);
   border-radius: var(--radius);
   padding: 14px;
+
+  /* Opcional (performance): limita repaint do painel de preview */
+  /* contain: layout paint; */
 }
 
 .video-container{
@@ -191,6 +199,9 @@
   white-space: pre-wrap;
   max-height: 220px;
   overflow: auto;
+
+  /* Opcional (performance): isola área de log */
+  /* contain: layout paint; */
 }
 
 /* responsivo */
