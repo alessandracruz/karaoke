@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Karaokê • Cantor</title>
 
-  <link rel="stylesheet" href="assets/css/base.css"/>
-  <link rel="stylesheet" href="assets/css/singer.css"/>
+  <link rel="stylesheet" href="./assets/css/base.css"/>
+  <link rel="stylesheet" href="./assets/css/singer.css"/>
 </head>
 <body>
   <div class="container">
@@ -15,15 +15,31 @@
       <div class="meta">Modo: Cantor</div>
     </div>
 
-    <div class="stage panel">
-      <div class="panel-h">Nenhuma música selecionada</div>
-      <div class="panel-b center">
-        <div class="hint">Selecione uma música na tela do operador.</div>
-        <a class="btn btn-accent" href="manager.html">Ir para Operador</a>
+  <!-- Standby -->
+  <div id="singer-status" class="stage panel" aria-live="polite">
+    <div class="panel-h">Nenhuma música selecionada</div>
+    <div class="panel-b center">
+      <div class="hint">Selecione uma música na tela do operador.</div>
+      <a class="btn btn-accent" href="manager.html">Ir para Operador</a>
+    </div>
+  </div>
+
+  <!-- Playing (hidden by default) -->
+  <div id="singer-playing" class="stage panel" hidden>
+    <div class="panel-h">
+      <span id="song-title">---</span>
+      <span class="meta"> • </span>
+      <span id="song-artist" class="meta">---</span>
+    </div>
+
+    <div class="panel-b">
+      <div class="lyrics">
+        <p id="lyrics-current" class="lyrics-current"></p>
+        <ul id="lyrics-next" class="lyrics-next"></ul>
       </div>
     </div>
   </div>
 
-  <script type="module" src="assets/js/singer.js"></script>
+  <script type="module" src="./assets/js/singer.js"></script>
 </body>
 </html>

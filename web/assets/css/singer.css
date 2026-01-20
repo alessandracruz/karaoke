@@ -18,3 +18,57 @@
 
 .hint{ color: var(--muted); }
 
+/* Singer lyrics (v1) */
+#singer-playing[hidden] {
+  display: none;
+}
+
+.lyrics {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px 18px;
+}
+
+.lyrics-current {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  text-wrap: balance;
+}
+
+.lyrics-next {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.lyrics-next > li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Small screens: keep it readable */
+@media (max-width: 420px) {
+  .lyrics {
+    padding: 22px 14px;
+  }
+
+  .lyrics-current {
+    font-size: 24px;
+  }
+
+  .lyrics-next {
+    font-size: 16px;
+  }
+}
+__
