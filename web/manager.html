@@ -1,204 +1,81 @@
 <!DOCTYPE html>
 <html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Karaoke Manager</title>
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Karaoke Manager</title>
-    
-    <!-- CSS externo (novo) -->
-    <link rel="stylesheet" href="assets/css/base.css">
-    <link rel="stylesheet" href="assets/css/manager.css">
-<head>
+  <!-- CSS externo -->
+  <link rel="stylesheet" href="assets/css/base.css" />
+  <link rel="stylesheet" href="assets/css/manager.css" />
+</head>
 
 <body>
+  <div class="tabs">
+    <button id="tab-search" class="tab active" type="button">Search</button>
+    <button id="tab-bulk" class="tab" type="button">Bulk Download</button>
+  </div>
 
-    <div class="tabs">
-        <button class="tab active" onclick="switchTab('search')">Search</button>
-        <button class="tab" onclick="switchTab('bulk')">Bulk Download</button>
+  <!-- SEARCH TAB -->
+  <div id="search" class="content active">
+    <div class="search-bar">
+      <input type="text" id="query" placeholder="Search for a song..." />
+      <button id="btn-search" type="button">Search</button>
     </div>
 
-    <!-- SEARCH TAB -->
-    <div id="search" class="content active">
-        <div class="search-bar">
-            <input type="text" id="query" placeholder="Search for a song..." onkeypress="handleEnter(event)">
-            <button onclick="performSearch()">Search</button>
+    <div class="loading" id="search-loading">Searching...</div>
+
+    <div class="main-view">
+      <div class="results-list" id="results">
+        <!-- Items will go here -->
+        <div style="padding:20px; text-align:center; color:#555;">No results yet</div>
+      </div>
+
+      <div class="preview-panel">
+        <div class="video-container">
+          <iframe
+            id="preview-frame"
+            src=""
+            title="YouTube video player"
+            frameborder="0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen
+          ></iframe>
         </div>
 
-        <div class="loading" id="search-loading">Searching...</div>
-
-        <div class="main-view">
-            <div class="results-list" id="results">
-                <!-- Items will go here -->
-                <div style="padding:20px; text-align:center; color:#555;">No results yet</div>
-            </div>
-
-            <div class="preview-panel">
-                <div class="video-container">
-                    <iframe id="preview-frame" src="" title="YouTube video player" frameborder="0"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                        referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
-                </div>
-                <div style="margin-top:20px;">
-                    <h3 id="selected-title">Select a song</h3>
-                    <p id="selected-artist" style="color:#aaa;">To preview and download</p>
-                </div>
-                <div class="actions-panel">
-                    <button id="btn-download" disabled onclick="downloadSelected()">Download Selected</button>
-                </div>
-                <div id="download-status" style="margin-top:10px; color: #03dac6;"></div>
-            </div>
+        <div style="margin-top:20px;">
+          <h3 id="selected-title">Select a song</h3>
+          <p id="selected-artist" style="color:#aaa;">To preview and download</p>
         </div>
+
+        <div class="actions-panel">
+          <button id="btn-download" type="button" disabled>Download Selected</button>
+        </div>
+
+        <div id="download-status" style="margin-top:10px; color:#03dac6;"></div>
+      </div>
     </div>
+  </div>
 
-    <!-- BULK TAB -->
-    <div id="bulk" class="content">
-        <div class="bulk-container">
-            <p>Paste YouTube Music links below (one per line):</p>
-            <textarea id="bulk-input" style="height: 150px;"
-                placeholder="https://music.youtube.com/watch?v=...\nhttps://music.youtube.com/watch?v=..."></textarea>
-            <button onclick="startBulkDownload()">Download All</button>
-            <p>Log:</p>
-            <div id="bulk-log"></div>
-        </div>
+  <!-- BULK TAB -->
+  <div id="bulk" class="content">
+    <div class="bulk-container">
+      <p>Paste YouTube Music links below (one per line):</p>
+      <textarea
+        id="bulk-input"
+        style="height:150px;"
+        placeholder="https://music.youtube.com/watch?v=...https://music.youtube.com/watch?v=..."
+      ></textarea>
+
+      <button id="btn-bulk-download" type="button">Download All</button>
+
+      <p>Log:</p>
+      <div id="bulk-log"></div>
     </div>
+  </div>
 
-    <script>
-        let currentSelected = null;
-
-        function switchTab(tabId) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
-
-            // Find button by text mostly, but here index matching is easier if rigid. 
-            // Let's just use simple dom logic
-            if (tabId === 'search') document.querySelectorAll('.tab')[0].classList.add('active');
-            else document.querySelectorAll('.tab')[1].classList.add('active');
-
-            document.getElementById(tabId).classList.add('active');
-        }
-
-        function handleEnter(e) {
-            if (e.key === 'Enter') performSearch();
-        }
-
-        async function performSearch() {
-            const query = document.getElementById('query').value;
-            if (!query) return;
-
-            document.getElementById('search-loading').style.display = 'block';
-            document.getElementById('results').innerHTML = '';
-
-            try {
-                // Call Python API
-                const results = await pywebview.api.search(query);
-                renderResults(results);
-            } catch (err) {
-                console.error(err);
-                document.getElementById('results').innerHTML = '<div style="color:red; padding:10px;">Error searching</div>';
-            } finally {
-                document.getElementById('search-loading').style.display = 'none';
-            }
-        }
-
-        function renderResults(results) {
-            const container = document.getElementById('results');
-            container.innerHTML = '';
-
-            if (results.length === 0) {
-                container.innerHTML = '<div style="padding:10px;">No results found.</div>';
-                return;
-            }
-
-            results.forEach(song => {
-                const el = document.createElement('div');
-                el.className = 'result-item';
-                // Using hardcoded indexing based on typical structure, or dict if Python sends dict
-                // Python will send: {videoId, title, artist, album}
-                el.onclick = () => selectSong(song);
-
-                el.innerHTML = `
-                    <div class="result-info">
-                        <div>${song.title}</div>
-                        <div>${song.artist}</div>
-                    </div>
-                `;
-                container.appendChild(el);
-            });
-        }
-
-        function selectSong(song) {
-            currentSelected = song;
-            document.getElementById('selected-title').innerText = song.title;
-            document.getElementById('selected-artist').innerText = song.artist;
-            document.getElementById('btn-download').disabled = false;
-            document.getElementById('download-status').innerText = "";
-
-            // Update IFrame
-            // Use embed URL with extra parameters to avoid 'Video Unavailable' on local files
-            // 'origin' parameter is key when running from file://
-            document.getElementById('preview-frame').src = `https://www.youtube.com/embed/${song.videoId}?autoplay=0&origin=https://youtube.com`;
-        }
-
-        async function downloadSelected() {
-            if (!currentSelected) return;
-            const btn = document.getElementById('btn-download');
-            const status = document.getElementById('download-status');
-
-            btn.disabled = true;
-            btn.innerText = "Downloading...";
-            status.innerText = "Starting download...";
-
-            try {
-                const result = await pywebview.api.download(currentSelected.videoId, currentSelected.title, currentSelected.artist);
-                status.innerText = result; // "Success" or error message
-            } catch (error) {
-                status.innerText = "Error: " + error;
-            } finally {
-                btn.disabled = false;
-                btn.innerText = "Download Selected";
-            }
-        }
-
-        async function startBulkDownload() {
-            const text = document.getElementById('bulk-input').value;
-            if (!text.trim()) return;
-
-            const log = document.getElementById('bulk-log');
-            log.innerText += "Starting bulk process...\n";
-
-            try {
-                // We'll let Python handle the line splitting and async processing.
-                // But pywebview simple calls are sync-ish unless we manage it. 
-                // The python method `bulk_download` should probably yield updates or we just fire and forget?
-                // Better: Python returns immediately, then uses window.evaluate_js to update log.
-                await pywebview.api.bulk_download(text);
-            } catch (e) {
-                log.innerText += "Error triggering bulk: " + e + "\n";
-            }
-        }
-
-        // Exposed function for Python to call
-        // Exposed function for Python to call
-        function logBulk(message) {
-            // Update Bulk Log
-            const log = document.getElementById('bulk-log');
-            if (log) {
-                log.innerText += message + "\n";
-                log.scrollTop = log.scrollHeight;
-            }
-
-            // Also update Search Status if we are there
-            const status = document.getElementById('download-status');
-            if (status) {
-                // Keep only last message for status line, or append?
-                // For status line, we usually want the latest action.
-                // We can use a heuristic: if message is long, ignore.
-                if (message.length < 100) status.innerText = message;
-            }
-        }
-
-    </script>
+  <!-- JS externo (module) -->
+  <script type="module" src="assets/js/manager.page.js"></script>
 </body>
-
 </html>
