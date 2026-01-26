@@ -1,3 +1,5 @@
 pygame
 pyaudio
 numpy
+flask
+flask-cors

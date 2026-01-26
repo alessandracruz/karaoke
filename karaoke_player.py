@@ -9,6 +9,7 @@ import json
 import sqlite3
 import ctypes # Para DPI Awareness no Windows
 from scorer import Scorer
+from api_server import KaraokeAPI
 
 # Constantes
 WIDTH, HEIGHT = 1024, 768
@@ -69,6 +70,53 @@ class SongLibrary:
         except sqlite3.Error as e:
             print(f"Erro na busca: {e}")
         return None
+
+    def get_song(self, song_id):
+        """Busca música pelo ID."""
+        if not self.conn: return None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM musicas WHERE id = ?", (song_id,))
+            row = cursor.fetchone()
+            if row:
+                song_id_str = str(row['id'])
+                base_path = os.path.join("songs", song_id_str)
+                audio_path = os.path.join(base_path, "instrumental.mp3")
+                orig_audio_path = os.path.join(base_path, "original.mp3")
+                
+                # Verify specific file existence
+                if not os.path.exists(audio_path) and os.path.exists(orig_audio_path):
+                    audio_path = orig_audio_path
+                
+                return {
+                    'id': row['id'],
+                    'code': row['Cod'],
+                    'title': row['Titulo'],
+                    'artist': row['Cantor'],
+                    'path': audio_path,
+                    'lyrics_file': os.path.join(base_path, "lyrics_v1.json")
+                }
+        except Exception as e:
+            print(f"Erro get_song: {e}")
+        return None
+
+    def get_all_songs(self):
+        """Retorna todas as músicas disponíveis."""
+        songs = []
+        if not self.conn: return songs
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM musicas WHERE status = 'disponivel' ORDER BY Titulo")
+            for row in cursor.fetchall():
+                 songs.append({
+                    'id': row['id'],
+                    'code': row['Cod'],
+                    'title': row['Titulo'],
+                    'artist': row['Cantor']
+                })
+        except Exception as e:
+            print(f"Erro get_all_songs: {e}")
+        return songs
 
     def sync_availability(self):
         """Verifica quais músicas estão na pasta e atualiza o banco."""
@@ -131,9 +179,6 @@ class KaraokePlayer:
             print("Aviso: Falha ao inicializar mixer com config padrão. Tentando automático.")
             pygame.mixer.init()
 
-            print("Aviso: Falha ao inicializar mixer com config padrão. Tentando automático.")
-            pygame.mixer.init()
-
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
         pygame.display.set_caption("Sistema de Karaokê Python")
         
@@ -147,7 +192,12 @@ class KaraokePlayer:
         self.clock = pygame.time.Clock()
 
         self.manager = SongLibrary()
+        self.library = self.manager # Alias for API compatibility
         self.scorer = Scorer()
+        
+        # Iniciar API Server
+        self.api = KaraokeAPI(self)
+        self.api.start()
         
         # Fontes do Sistema
         self.init_fonts(1.0) # Inicializa com escala 1.0
@@ -857,9 +907,14 @@ class KaraokePlayer:
                 l_type = self.lyrics_files[self.current_lyrics_index]['type']
                 l_label = l_type.upper() # LRC, V1, V2
             
-            info_text = f"{self.current_song['title']} - {self.current_song['artist']} [{type_label}] [Lyrics: {l_label}]"
-            surf = self.font_info.render(info_text, True, COLOR_HIGHLIGHT)
-            self.screen.blit(surf, (20, 20))
+            if self.current_song:
+                info_text = f"{self.current_song['title']} - {self.current_song['artist']} [{type_label}] [Lyrics: {l_label}]"
+                surf = self.font_info.render(info_text, True, COLOR_HIGHLIGHT)
+                self.screen.blit(surf, (20, 20))
+            else:
+                self.state = "MENU" # Fallback if song data is missing
+                return
+
 
             # Letras
             current_time = self.get_current_time()
