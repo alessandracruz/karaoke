@@ -6,6 +6,8 @@ import time
 import random
 import threading
 import json
+import sqlite3
+import ctypes # Para DPI Awareness no Windows
 from scorer import Scorer
 
 # Constantes
@@ -23,20 +25,90 @@ COLOR_BLUE = (0, 100, 255)
 
 class SongLibrary:
     """
-    Classe para carregar a biblioteca de músicas do arquivo JSON.
+    Gerencia a biblioteca de músicas usando SQLite.
     """
-    def __init__(self, library_file="library.json"):
-        self.library_file = library_file
-        self.library = {}
-        self.load_library()
+    def __init__(self, db_path="karaoke.db"):
+        self.db_path = db_path
+        self.conn = None
+        self.connect()
 
-    def load_library(self):
-        """Carrega o arquivo library.json para a memória."""
+    def connect(self):
         try:
-            with open(self.library_file, 'r', encoding='utf-8') as f:
-                self.library = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            self.library = {}
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn.row_factory = sqlite3.Row
+        except sqlite3.Error as e:
+            print(f"Erro ao conectar ao banco: {e}")
+
+    def get_song_by_code(self, code):
+        """Busca música pelo código (apenas se disponível)."""
+        if not self.conn: return None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM musicas WHERE Cod = ? AND status = 'disponivel'", (code,))
+            row = cursor.fetchone()
+            if row:
+                song_id = str(row['id'])
+                base_path = os.path.join("songs", song_id)
+                
+                # Determina paths (prioridades)
+                audio_path = os.path.join(base_path, "instrumental.mp3")
+                orig_audio_path = os.path.join(base_path, "original.mp3")
+                
+                # Se não tiver instrumental, usa original como principal
+                if not os.path.exists(audio_path) and os.path.exists(orig_audio_path):
+                    audio_path = orig_audio_path
+                
+                return {
+                    'id': song_id,
+                    'title': row['Titulo'],
+                    'artist': row['Cantor'],
+                    'audio_path': audio_path,
+                    'original_audio_path': orig_audio_path,
+                    'base_path': base_path
+                }
+        except sqlite3.Error as e:
+            print(f"Erro na busca: {e}")
+        return None
+
+    def sync_availability(self):
+        """Verifica quais músicas estão na pasta e atualiza o banco."""
+        print("Iniciando sincronização da biblioteca...")
+        if not self.conn: return "Erro DB"
+        
+        try:
+            cursor = self.conn.cursor()
+            
+            # 1. Reseta tudo para ausente
+            cursor.execute("UPDATE musicas SET status = 'ausente'")
+            
+            # 2. Scaneia pasta
+            found_ids = []
+            if os.path.exists("songs"):
+                for item in os.listdir("songs"):
+                    item_path = os.path.join("songs", item)
+                    if os.path.isdir(item_path):
+                        # Verifica se tem arquivos minimos
+                        has_audio = (
+                            os.path.exists(os.path.join(item_path, "instrumental.mp3")) or 
+                            os.path.exists(os.path.join(item_path, "original.mp3"))
+                        )
+                        if has_audio:
+                            if item.isdigit(): found_ids.append(item)
+            
+            # 3. Atualiza encontrados
+            if found_ids:
+                # SQLite não tem listas diretas, fazemos loop ou IN clause dinâmico
+                # Para segurança e simplicidade, vamos de muitas queries (local é rápido) ou batch
+                cursor.executemany("UPDATE musicas SET status = 'disponivel' WHERE id = ?", [(x,) for x in found_ids])
+            
+            self.conn.commit()
+            count = cursor.execute("SELECT COUNT(*) FROM musicas WHERE status = 'disponivel'").fetchone()[0]
+            print(f"Sincronização concluída. {count} músicas disponíveis.")
+            return f"Concluído: {count} músicas."
+            
+        except sqlite3.Error as e:
+            print(f"Erro ao sincronizar: {e}")
+            return f"Erro: {e}"
 
 class KaraokePlayer:
     """
@@ -44,6 +116,12 @@ class KaraokePlayer:
     Gerencia a interface, reprodução de áudio, letras e pontuação.
     """
     def __init__(self):
+        # Configura DPI Awareness para Windows (evita borrões e coordenadas erradas em 4k)
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except AttributeError:
+            pass # Não é Windows ou falhou
+
         pygame.init()
         # Inicializa mixer com configurações padrão explícitas para evitar conflitos com PyAudio
         # 44.1kHz, 16-bit signed, Stereo, Buffer 2048
@@ -53,7 +131,10 @@ class KaraokePlayer:
             print("Aviso: Falha ao inicializar mixer com config padrão. Tentando automático.")
             pygame.mixer.init()
 
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+            print("Aviso: Falha ao inicializar mixer com config padrão. Tentando automático.")
+            pygame.mixer.init()
+
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
         pygame.display.set_caption("Sistema de Karaokê Python")
         self.clock = pygame.time.Clock()
 
@@ -61,9 +142,7 @@ class KaraokePlayer:
         self.scorer = Scorer()
         
         # Fontes do Sistema
-        self.font_lyrics = pygame.font.Font(None, FONT_SIZE_LYRICS)
-        self.font_info = pygame.font.Font(None, FONT_SIZE_INFO)
-        self.font_small = pygame.font.Font(None, 20)
+        self.init_fonts(1.0) # Inicializa com escala 1.0
 
         self.current_song = None
         self.lyrics = [] # Lista de (timestamp_ms, text)
@@ -87,7 +166,7 @@ class KaraokePlayer:
         self.cfg_volume_music = 0.5
         self.cfg_monitoring = False
         self.cfg_latency_chunk = 2048 # Aumentado para 2048 para evitar crashes em monitoramento
-        self.cfg_difficulty = "Normal" # Fácil, Normal, Difícil
+        self.cfg_difficulty = "Fácil" # Fácil, Normal, Difícil
         self.show_rhythm_indicator = True # Config Visual
         
         # Audio Engine
@@ -101,20 +180,169 @@ class KaraokePlayer:
         self.apply_audio_config()
         self.scorer.start() # Inicia loop de audio (mudo se sem input)
 
-    def load_random_background(self):
-        """
-        Gera um fundo gradiente aleatório para cada música.
-        """
-        self.background = pygame.Surface((WIDTH, HEIGHT))
-        # Cria um gradiente
-        c1 = (random.randint(0,100), random.randint(0,100), random.randint(50,150))
-        c2 = (random.randint(0,50), random.randint(0,50), random.randint(100,200))
+    def init_fonts(self, scale=1.0):
+        """Inicializa fontes com fator de escala base."""
+        self.font_lyrics = pygame.font.Font(None, int(FONT_SIZE_LYRICS * scale))
+        self.font_info = pygame.font.Font(None, int(FONT_SIZE_INFO * scale))
+        self.font_small = pygame.font.Font(None, int(20 * scale))
 
-        for y in range(HEIGHT):
-            r = c1[0] + (c2[0] - c1[0]) * y // HEIGHT
-            g = c1[1] + (c2[1] - c1[1]) * y // HEIGHT
-            b = c1[2] + (c2[2] - c1[2]) * y // HEIGHT
-            pygame.draw.line(self.background, (r,g,b), (0,y), (WIDTH,y))
+    def generate_new_background(self):
+        """Escolhe novas cores aleatórias usando paletas variadas."""
+        themes = [
+            # Ocean (Azul/Ciano)
+            lambda: ((random.randint(0,50), random.randint(0,100), random.randint(100,200)),
+                     (random.randint(0,30), random.randint(100,200), random.randint(200,255))),
+            # Sunset (Laranja/Roxo)
+            lambda: ((random.randint(150,255), random.randint(50,150), random.randint(0,50)),
+                     (random.randint(50,100), random.randint(0,50), random.randint(100,200))),
+            # Nature (Verde/Azul)
+            lambda: ((random.randint(0,50), random.randint(100,200), random.randint(50,150)),
+                     (random.randint(0,100), random.randint(50,100), random.randint(100,200))),
+            # Neon (Pink/Roxo)
+            lambda: ((random.randint(200,255), random.randint(0,100), random.randint(200,255)),
+                     (random.randint(50,150), random.randint(0,50), random.randint(150,250))),
+            # Dark Red (Vermelho/Preto)
+            lambda: ((random.randint(100,200), random.randint(0,50), random.randint(0,50)),
+                     (random.randint(50,100), random.randint(0,30), random.randint(0,30))),
+            # Random Vivid
+            lambda: ((random.randint(50,200), random.randint(50,200), random.randint(50,200)),
+                     (random.randint(50,200), random.randint(50,200), random.randint(50,200)))
+        ]
+        
+        generator = random.choice(themes)
+        self.bg_c1, self.bg_c2 = generator()
+        self.render_background()
+
+    def render_background(self):
+        """Renderiza o fundo usando as cores atuais na resolução atual."""
+        w, h = self.screen.get_width(), self.screen.get_height()
+        self.background = pygame.Surface((w, h)).convert()
+        
+        # Cria/Atualiza Overlay aqui
+        self.overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+        self.overlay.fill(COLOR_BG_OVERLAY)
+
+        c1 = getattr(self, 'bg_c1', (0,0,100))
+        c2 = getattr(self, 'bg_c2', (0,0,50))
+
+        # Otimização: desenhar linhas horizontais
+        for y in range(h):
+            # Interpolação linear (float) para evitar degraus abruptos
+            f = y / h
+            r = int(c1[0] + (c2[0] - c1[0]) * f)
+            g = int(c1[1] + (c2[1] - c1[1]) * f)
+            b = int(c1[2] + (c2[2] - c1[2]) * f)
+            
+            # Clamp color values (just in case)
+            r = max(0, min(255, r))
+            g = max(0, min(255, g))
+            b = max(0, min(255, b))
+            
+            pygame.draw.line(self.background, (r,g,b), (0,y), (w,y))
+
+    def load_random_background(self):
+        # Alias para compatibilidade antiga, se necessário, ou redirecionar
+        self.generate_new_background()
+
+    # ... (other methods maintained but skipped in replacement for brevity if unchanged)
+
+    def draw(self):
+        """Renderização."""
+        W, H = self.screen.get_width(), self.screen.get_height()
+        
+        # Fundo
+        if self.state == "CONFIG":
+             self.screen.fill((20, 20, 30)) # Fundo escuro tecnico
+        else:
+            if self.background: 
+                # Se mudou resolução, re-renderiza para ficar HD
+                if self.background.get_size() != (W, H):
+                    self.render_background()
+                self.screen.blit(self.background, (0,0))
+            
+            # Overlay otimizado
+            if hasattr(self, 'overlay'):
+                 self.screen.blit(self.overlay, (0,0))
+
+        if self.state == "MENU":
+            self.draw_centered_text("SISTEMA DE KARAOKÊ", -100, color=COLOR_HIGHLIGHT)
+            self.draw_centered_text("Digite o código e ENTER para adicionar à fila", -50)
+            self.draw_centered_text("[C] para Configurar Áudio / Microfone", 0, size=30, color=COLOR_BLUE)
+            
+            self.draw_centered_text(f"Fila: {', '.join(self.queue)}", 80)
+            
+            # Instrução visual substitui lista antiga
+            self.draw_centered_text("Consulte o catálogo físico ou app", 200, color=(150,150,150))
+
+            input_surf = self.font_info.render(f"Entrada: {self.input_buffer}", True, COLOR_HIGHLIGHT)
+            self.screen.blit(input_surf, (50, H - 50))
+
+        elif self.state == "PLAYING":
+            t_type = getattr(self, 'current_track_type', 'instrumental')
+            type_label = "INSTRUMENTAL" if t_type == 'instrumental' else "VOCAL"
+            
+            # Lyrics Type Label
+            l_label = "N/A"
+            if hasattr(self, 'lyrics_files') and self.lyrics_files:
+                l_type = self.lyrics_files[self.current_lyrics_index]['type']
+                l_label = l_type.upper() # LRC, V1, V2
+            
+            info_text = f"{self.current_song['title']} - {self.current_song['artist']} [{type_label}] [Lyrics: {l_label}]"
+            surf = self.font_info.render(info_text, True, COLOR_HIGHLIGHT)
+            self.screen.blit(surf, (20, 20))
+
+            # Letras
+            current_time = self.get_current_time()
+            
+            # Lógica para mostrar intro/proxima se linha for -1
+            render_idx = self.current_line_index
+            if render_idx == -1:
+                # Se ainda não começou, tenta mostrar a primeira linha
+                if self.lyrics:
+                     # Checa se é apenas introdução
+                     first_line_start = self.lyrics[0]['time']
+                     if current_time < first_line_start:
+                         time_to_start = (first_line_start - current_time) / 1000
+                         if time_to_start < 10: # Mostra se falta menos de 10s
+                             render_idx = 0
+                             self.draw_centered_text(f"Próxima...", -80, 24, (150,150,150))
+                         else:
+                             self.draw_centered_text("INTRODUÇÃO", 0, 60, COLOR_HIGHLIGHT)
+
+            if render_idx != -1 and render_idx < len(self.lyrics):
+                line_data = self.lyrics[render_idx]
+                if 'words' in line_data: self.draw_karaoke_line(line_data, current_time, -40) 
+                else: self.draw_centered_text(line_data['text'], -40, 50, COLOR_HIGHLIGHT)
+
+            # Proxima linha (Preview)
+            # Se render_idx == -1 (intro), proxima é a 0. Se != -1, proxima é render_idx + 1
+            next_idx = render_idx + 1 if render_idx != -1 else 0
+            
+            if next_idx < len(self.lyrics):
+                line_data = self.lyrics[next_idx]
+                if 'words' in line_data: self.draw_karaoke_line(line_data, current_time, 40) 
+                else: self.draw_centered_text(line_data['text'], 40, 30, (200,200,200)) 
+
+            # HUD Futurista (VU Meter e Ritmo)
+            self.draw_vu_meter_hud()
+            if self.show_rhythm_indicator:
+                self.draw_rhythm_indicator_hud()
+            
+            self.draw_ui_progress()
+
+            if self.input_buffer:
+                input_surf = self.font_info.render(f"Add Fila: {self.input_buffer}", True, COLOR_WHITE)
+                self.screen.blit(input_surf, (20, H - 40))
+
+        elif self.state == "SCORE":
+            self.draw_centered_text("MÚSICA FINALIZADA", -50)
+            self.draw_centered_text(f"Sua Pontuação: {self.score_result}/100", 20, 80, COLOR_HIGHLIGHT)
+            self.draw_centered_text("Pressione ENTER para continuar", 100, 30)
+
+        elif self.state == "CONFIG":
+            self.draw_config_screen()
+
+        pygame.display.flip()
 
     def parse_lrc(self, lrc_path):
         """
@@ -155,21 +383,33 @@ class KaraokePlayer:
 
     def start_song(self, song_id):
         """Inicia a reprodução."""
-        song_data = self.manager.library.get(song_id)
+        # Busca no banco
+        song_data = self.manager.get_song_by_code(song_id)
         if not song_data:
-            print(f"Música {song_id} não encontrada!")
+            print(f"Música {song_id} não encontrada ou indisponível!")
             return
             
         print(f"Iniciando música: {song_data['title']}")
         self.current_song = song_data
         
-        lyric_path = song_data.get('lrc_path')
-        if lyric_path and lyric_path.endswith('.lrc'):
-            json_path = lyric_path.replace('.lrc', '_lyrics.json')
-            if os.path.exists(json_path):
-                lyric_path = json_path
+        # Detecta Lyrics Disponíveis
+        base = song_data['base_path']
+        self.lyrics_files = []
         
-        self.lyrics = self.parse_lrc(lyric_path)
+        # Prioridade de Ordem: v1 (Sincronizado Padrão), v2 (Alternativo), lrc (Linha)
+        if os.path.exists(os.path.join(base, "lyrics_v1.json")):
+             self.lyrics_files.append({"type": "v1", "path": os.path.join(base, "lyrics_v1.json")})
+        if os.path.exists(os.path.join(base, "lyrics_v2.json")):
+             self.lyrics_files.append({"type": "v2", "path": os.path.join(base, "lyrics_v2.json")})
+        if os.path.exists(os.path.join(base, "lyrics.lrc")):
+             self.lyrics_files.append({"type": "lrc", "path": os.path.join(base, "lyrics.lrc")})
+             
+        # Carrega o primeiro disponível
+        self.current_lyrics_index = 0
+        if self.lyrics_files:
+             self._load_lyrics_by_index(0)
+        else:
+             self.lyrics = []
 
         try:
             try:
@@ -190,6 +430,23 @@ class KaraokePlayer:
         self.scorer.set_paused(False) # Resume audio processing safely
         self.scorer.reset()
         self.load_random_background()
+
+    def _load_lyrics_by_index(self, index):
+        if not self.lyrics_files: return
+        data = self.lyrics_files[index]
+        print(f"Carregando letras: {data['type']}")
+        self.lyrics = self.parse_lrc(data['path'])
+        
+    def switch_lyrics(self):
+        """Alterna entre arquivos de letra disponíveis."""
+        if not self.lyrics_files or len(self.lyrics_files) <= 1: return
+        
+        self.current_lyrics_index = (self.current_lyrics_index + 1) % len(self.lyrics_files)
+        self._load_lyrics_by_index(self.current_lyrics_index)
+        
+        # Mostra feedback visual (opcional/debug)
+        l_type = self.lyrics_files[self.current_lyrics_index]['type']
+        print(f"Letras alteradas para: {l_type}")
         
     def get_current_time(self):
         """Retorna tempo atual em ms com compensação de offset."""
@@ -286,11 +543,14 @@ class KaraokePlayer:
             if self.state == "MENU":
                 if event.key == pygame.K_RETURN:
                     if self.input_buffer:
-                        if self.input_buffer in self.manager.library:
+                        # Verifica no banco
+                        song = self.manager.get_song_by_code(self.input_buffer)
+                        if song:
                             self.queue.append(self.input_buffer)
                             print(f"Adicionado {self.input_buffer} à fila.")
                         else:
-                            print("Código inválido.")
+                            print("Código inválido ou indisponível.")
+                            
                         self.input_buffer = ""
                 elif event.key == pygame.K_BACKSPACE:
                     self.input_buffer = self.input_buffer[:-1]
@@ -303,13 +563,16 @@ class KaraokePlayer:
             elif self.state == "PLAYING":
                 if event.key == pygame.K_v:
                     self.toggle_audio_track()
+                elif event.key == pygame.K_l:
+                    self.switch_lyrics()
                 elif event.key == pygame.K_RIGHT:
                      self.seek_song(10)
                 elif event.key == pygame.K_LEFT:
                      self.seek_song(-10)
                 elif event.key == pygame.K_RETURN and self.input_buffer:
                      # Adicionar à fila durante jogo
-                     if self.input_buffer in self.manager.library:
+                     song = self.manager.get_song_by_code(self.input_buffer)
+                     if song:
                         self.queue.append(self.input_buffer)
                         print(f"Adicionado {self.input_buffer} à fila.")
                      self.input_buffer = ""
@@ -325,18 +588,18 @@ class KaraokePlayer:
             elif self.state == "CONFIG":
                 if event.key == pygame.K_ESCAPE or event.key == pygame.K_c:
                     self.state = "MENU" # Voltar
-                
-                # Atalhos de Configuração Rápida (Teclado)
-                # Seta para cima/baixo seleciona item? (UI complexa, vamos usar cliques/teclas simples por enquanto)
                 pass
         
         # Eventos de Clique para CONFIG
         if event.type == pygame.MOUSEBUTTONDOWN and self.state == "CONFIG":
             x, y = event.pos
-            # Lógica simples de "Hitbox" para a tela de configuração
-            # Ex: Slider latencia, monitoramento, etc.
-            # Se fosse um app maior, usaria uma lib de UI. Aqui faremos hardcode por zonas.
             
+            # Botão Atualizar Biblioteca (700, 50, 200, 50) - Exemplo
+            if 700 <= x <= 900 and 50 <= y <= 100:
+                print("Atualizando biblioteca...")
+                res = self.manager.sync_availability()
+                print(res)
+
             # Botão Monitoramento (Toggle)
             if 300 <= x <= 320 and 150 <= y <= 170:
                 self.cfg_monitoring = not self.cfg_monitoring
@@ -448,38 +711,52 @@ class KaraokePlayer:
 
     def draw(self):
         """Renderização."""
+        W, H = self.screen.get_width(), self.screen.get_height()
         # Fundo
         if self.state == "CONFIG":
              self.screen.fill((20, 20, 30)) # Fundo escuro tecnico
         else:
-            if self.background: self.screen.blit(self.background, (0,0))
-            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-            overlay.fill(COLOR_BG_OVERLAY)
-            self.screen.blit(overlay, (0,0))
+            if self.background: 
+                # Se mudou resolução, re-renderiza para ficar HD
+                if self.background.get_size() != (W, H):
+                    self.render_background()
+                self.screen.blit(self.background, (0,0))
+            
+            # Overlay otimizado
+            if hasattr(self, 'overlay'):
+                 self.screen.blit(self.overlay, (0,0))
+            else:
+                 # Fallback temporário
+                 self.render_background()
+                 if hasattr(self, 'overlay'): self.screen.blit(self.overlay, (0,0))
 
         if self.state == "MENU":
-            self.draw_centered_text("SISTEMA DE KARAOKÊ", -100, color=COLOR_HIGHLIGHT)
-            self.draw_centered_text("Digite o código e ENTER para adicionar à fila", -50)
-            self.draw_centered_text("[C] para Configurar Áudio / Microfone", 0, size=30, color=COLOR_BLUE)
+            # Escala UI baseada na altura (768p referencia)
+            ui_scale = H / 768.0
             
-            self.draw_centered_text(f"Fila: {', '.join(self.queue)}", 80)
+            self.draw_centered_text("SISTEMA DE KARAOKÊ", int(-100 * ui_scale), color=COLOR_HIGHLIGHT)
+            self.draw_centered_text("Digite o código e ENTER para adicionar à fila", int(-50 * ui_scale))
+            self.draw_centered_text("[C] para Configurar Áudio / Microfone", 0, size=int(30 * ui_scale), color=COLOR_BLUE)
             
-            # Biblioteca
-            y_offset = 180
-            for code, data in list(self.manager.library.items())[:8]:
-                text = f"[{code}] {data['title']} - {data['artist']}"
-                surf = self.font_info.render(text, True, COLOR_WHITE)
-                self.screen.blit(surf, (50, y_offset))
-                y_offset += 30
+            self.draw_centered_text(f"Fila: {', '.join(self.queue)}", int(80 * ui_scale))
+            
+            # Instrução visual substitui lista antiga
+            self.draw_centered_text("Consulte o catálogo físico ou app", int(200 * ui_scale), color=(150,150,150))
 
             input_surf = self.font_info.render(f"Entrada: {self.input_buffer}", True, COLOR_HIGHLIGHT)
-            self.screen.blit(input_surf, (50, HEIGHT - 50))
+            self.screen.blit(input_surf, (50, H - 50))
 
         elif self.state == "PLAYING":
             t_type = getattr(self, 'current_track_type', 'instrumental')
             type_label = "INSTRUMENTAL" if t_type == 'instrumental' else "VOCAL"
             
-            info_text = f"{self.current_song['title']} - {self.current_song['artist']} ({type_label})"
+            # Lyrics Type Label
+            l_label = "N/A"
+            if hasattr(self, 'lyrics_files') and self.lyrics_files:
+                l_type = self.lyrics_files[self.current_lyrics_index]['type']
+                l_label = l_type.upper() # LRC, V1, V2
+            
+            info_text = f"{self.current_song['title']} - {self.current_song['artist']} [{type_label}] [Lyrics: {l_label}]"
             surf = self.font_info.render(info_text, True, COLOR_HIGHLIGHT)
             self.screen.blit(surf, (20, 20))
 
@@ -504,7 +781,7 @@ class KaraokePlayer:
 
             if self.input_buffer:
                 input_surf = self.font_info.render(f"Add Fila: {self.input_buffer}", True, COLOR_WHITE)
-                self.screen.blit(input_surf, (20, HEIGHT - 40))
+                self.screen.blit(input_surf, (20, H - 40))
 
         elif self.state == "SCORE":
             self.draw_centered_text("MÚSICA FINALIZADA", -50)
@@ -517,72 +794,141 @@ class KaraokePlayer:
         pygame.display.flip()
 
     def draw_karaoke_line(self, line_data, current_time, y_offset=0):
+        """
+        Desenha uma linha de karaokê, quebrando em múltiplas linhas se necessário,
+        mantendo o destaque sincronizado palavra por palavra.
+        """
         words = line_data.get('words', [])
-        total_width = 0
-        surfaces = []
+        if not words: return
+
+        W, H = self.screen.get_width(), self.screen.get_height()
+        ui_scale = H / 768.0
+        
+        # Escala o y_offset recebido (que é base 768p)
+        scaled_offset = int(y_offset * ui_scale)
+
         space_width = self.font_lyrics.size(" ")[0]
+        margin = int(100 * ui_scale)
+        max_width = W - margin # Margem proporcional
+        
+        # 1. Agrupar palavras em linhas visuais
+        visual_lines = []
+        current_line_words = []
+        current_line_width = 0
         
         for w in words:
-            txt = w['display']
-            if current_time >= w['end_ms']: color = COLOR_HIGHLIGHT
-            elif current_time >= w['start_ms']: color = (255, 100, 100)
-            else: color = (200, 200, 200)
+            word_txt = w['display']
+            word_surf_w = self.font_lyrics.size(word_txt)[0]
             
-            s = self.font_lyrics.render(txt, True, color)
-            surfaces.append(s)
-            total_width += s.get_width() + space_width
+            # Se a palavra sozinha já estoura e é a primeira da linha, entra assim mesmo
+            # Se não é a primeira, quebra linha antes
+            if current_line_width + word_surf_w > max_width and current_line_words:
+                visual_lines.append(current_line_words)
+                current_line_words = []
+                current_line_width = 0
             
-        start_x = (WIDTH - total_width) // 2
-        y = (HEIGHT // 2) + y_offset
-        current_x = start_x
-        for s in surfaces:
-            self.screen.blit(s, (current_x, y))
-            current_x += s.get_width() + space_width
+            current_line_words.append(w)
+            current_line_width += word_surf_w + space_width
+            
+        if current_line_words:
+            visual_lines.append(current_line_words)
+            
+        # 2. Calcular geometria vertical para centralizar o bloco
+        line_height = self.font_lyrics.get_linesize()
+        total_block_height = len(visual_lines) * line_height
+        
+        # Centraliza o bloco em relação ao y_offset (que é relativo ao centro da tela)
+        center_y = (H // 2) + scaled_offset
+        start_y = center_y - (total_block_height // 2)
+        
+        # 3. Desenhar cada linha
+        current_y = start_y
+        for v_line in visual_lines:
+            # Calcula largura total desta linha para centralizar horizontalmente
+            line_w = 0
+            for w in v_line:
+                line_w += self.font_lyrics.size(w['display'])[0] + space_width
+            line_w -= space_width # remove ultimo espaco
+            
+            start_x = (self.screen.get_width() - line_w) // 2
+            current_x = start_x
+            
+            for w in v_line:
+                txt = w['display']
+                
+                # Lógica de cor
+                if current_time >= w['end_ms']: 
+                    color = COLOR_HIGHLIGHT # Já passou
+                elif current_time >= w['start_ms']: 
+                    color = (255, 100, 100) # Cantando agora
+                else: 
+                    color = (200, 200, 200) # Futuro
+                
+                s = self.font_lyrics.render(txt, True, color)
+                self.screen.blit(s, (current_x, current_y))
+                current_x += s.get_width() + space_width
+            
+            current_y += line_height
 
     def draw_vu_meter_hud(self):
         """Desenha um VU Meter visual no canto inferior direito."""
+        W, H = self.screen.get_width(), self.screen.get_height()
+        ui_scale = H / 768.0
+        
         # Pega volume atual do mic principal
         vol = max(self.scorer.current_volume_mic1, self.scorer.current_volume_mic2)
-        # Normaliza visualmente (multiplicador)
-        height_val = min(150, int(vol * 5)) 
+        # Normaliza visualmente (multiplicador escalado)
+        base_h = min(150, int(vol * 5))
+        height_val = int(base_h * ui_scale)
         
-        base_x = WIDTH - 60
-        base_y = HEIGHT - 50
+        offset_x = int(60 * ui_scale)
+        offset_y = int(50 * ui_scale)
+        base_x = W - offset_x
+        base_y = H - offset_y
+        
+        bar_w = int(30 * ui_scale)
+        max_h = int(150 * ui_scale)
         
         # Barra de Fundo
-        pygame.draw.rect(self.screen, (50, 50, 50), (base_x, base_y - 150, 30, 150))
+        pygame.draw.rect(self.screen, (50, 50, 50), (base_x, base_y - max_h, bar_w, max_h))
         
-        # Barra Dinâmica (Gradiente fake)
+        # Barra Dinâmica
         if height_val > 0:
             color = COLOR_GREEN
-            if height_val > 100: color = COLOR_RED
-            elif height_val > 60: color = COLOR_HIGHLIGHT
+            if height_val > max_h * 0.6: color = COLOR_HIGHLIGHT
+            if height_val > max_h * 0.9: color = COLOR_RED
             
-            pygame.draw.rect(self.screen, color, (base_x, base_y - height_val, 30, height_val))
+            pygame.draw.rect(self.screen, color, (base_x, base_y - height_val, bar_w, height_val))
             
             # Efeito "Glow"
-            s = pygame.Surface((50, height_val))
+            glow_w = int(50 * ui_scale)
+            s = pygame.Surface((glow_w, height_val))
             s.set_alpha(50)
             s.fill(color)
-            self.screen.blit(s, (base_x - 10, base_y - height_val))
+            self.screen.blit(s, (base_x - int(10*ui_scale), base_y - height_val))
 
         # Texto "MIC"
         mic_txt = self.font_small.render("MIC", True, COLOR_WHITE)
-        self.screen.blit(mic_txt, (base_x + 2, base_y + 5))
+        self.screen.blit(mic_txt, (base_x, base_y + int(5 * ui_scale)))
 
     def draw_rhythm_indicator_hud(self):
         """Indicador circular de precisão."""
+        W, H = self.screen.get_width(), self.screen.get_height()
+        ui_scale = H / 768.0
+        
         acc = self.scorer.get_current_accuracy() # 0.0 a 1.0
         
-        cx = WIDTH - 120
-        cy = HEIGHT - 125
-        radius = 40
+        offset_x = int(120 * ui_scale)
+        offset_y = int(125 * ui_scale)
+        cx = W - offset_x
+        cy = H - offset_y
+        radius = int(40 * ui_scale)
+        thickness = max(1, int(3 * ui_scale))
         
         # Círculo base
-        pygame.draw.circle(self.screen, (50, 50, 50), (cx, cy), radius, 3)
+        pygame.draw.circle(self.screen, (50, 50, 50), (cx, cy), radius, thickness)
         
-        # Círculo de Precisão (Arco ou preenchimento)
-        # Cor varia com precisão
+        # Círculo de Precisão
         if acc > 0.8: color = COLOR_GREEN
         elif acc > 0.4: color = COLOR_HIGHLIGHT
         else: color = COLOR_RED
@@ -593,12 +939,15 @@ class KaraokePlayer:
              pygame.draw.circle(self.screen, color, (cx, cy), fill_rad)
         
         lbl = self.font_small.render("RITMO", True, COLOR_WHITE)
-        self.screen.blit(lbl, (cx - 20, cy + radius + 5))
+        self.screen.blit(lbl, (cx - int(20*ui_scale), cy + radius + int(5*ui_scale)))
 
 
     def draw_ui_progress(self):
         """Desenha barra de progresso e tempo."""
         if not self.current_song: return
+        
+        W, H = self.screen.get_width(), self.screen.get_height()
+        ui_scale = H / 768.0
         
         curr_ms = self.get_current_time()
         curr_sec = curr_ms // 1000
@@ -612,13 +961,13 @@ class KaraokePlayer:
             
         txt = f"{fmt_time(curr_sec)} / {fmt_time(total_sec)}"
         surf = self.font_info.render(txt, True, COLOR_WHITE)
-        self.screen.blit(surf, (20, HEIGHT - 70))
+        self.screen.blit(surf, (int(20*ui_scale), H - int(70 * ui_scale)))
         
         # Progress Bar
-        bar_w = WIDTH - 200
-        bar_h = 10
-        bar_x = 100
-        bar_y = HEIGHT - 30
+        bar_w = W - int(200 * ui_scale)
+        bar_h = int(10 * ui_scale)
+        bar_x = int(100 * ui_scale)
+        bar_y = H - int(30 * ui_scale)
         
         pygame.draw.rect(self.screen, (50,50,50), (bar_x, bar_y, bar_w, bar_h))
         
@@ -629,94 +978,165 @@ class KaraokePlayer:
 
     def draw_config_screen(self):
         """Desenha a tela de configuração completas."""
-        self.draw_centered_text("CONFIGURAÇÃO DE ÁUDIO", -300, color=COLOR_HIGHLIGHT)
-        self.draw_centered_text("[ESC] Voltar", -350, size=30, color=COLOR_WHITE)
+        W, H = self.screen.get_width(), self.screen.get_height()
+        CX = W // 2
+        # Escala UI baseada na altura (768p referencia)
+        ui_scale = H / 768.0
         
-        # Labels e Controles (Hardcoded layout)
+        # Offsets verticais escalados
+        self.draw_centered_text("CONFIGURAÇÃO DE ÁUDIO", int(-300 * ui_scale), color=COLOR_HIGHLIGHT)
+        self.draw_centered_text("[ESC] Voltar", int(-350 * ui_scale), size=int(30 * ui_scale), color=COLOR_WHITE)
+        
+        # Tamanhos base escalados
+        btn_w, btn_h = int(200 * ui_scale), int(50 * ui_scale)
+        chk_size = int(20 * ui_scale)
+        slider_w = int(300 * ui_scale)
+        line_h = max(2, int(5 * ui_scale))
+        radius = max(5, int(8 * ui_scale))
+        btn_h_small = int(30 * ui_scale)
+        
+        # Botão Atualizar Library
+        btn_y = int(50 * ui_scale)
+        btn_rect = pygame.Rect(CX + int(200 * ui_scale), btn_y, btn_w, btn_h)
+        
+        pygame.draw.rect(self.screen, (0, 100, 200), btn_rect)
+        btn_txt = self.font_small.render("Atualizar Biblioteca", True, COLOR_WHITE)
+        t_rect = btn_txt.get_rect(center=btn_rect.center)
+        self.screen.blit(btn_txt, t_rect)
+        
+        # Labels e Controles (Scaled layout)
         font = self.font_info
+        
+        start_y = int(150 * ui_scale)
+        gap_y = int(50 * ui_scale)
+        col_lbl_x = CX - int(400 * ui_scale)
+        col_ctrl_x = CX + int(50 * ui_scale) # Ajuste horizontal também
         
         # Coluna Esq: Labels
         lbls = [
-            ("Monitorar (Ouvir voz):", 150),
-            ("Mostrar Ritmo:", 190),
-            (f"Vol Mic 1 ({int(self.cfg_volume_mic1*100)}%):", 250),
-            (f"Vol Mic 2 ({int(self.cfg_volume_mic2*100)}%):", 300),
-            (f"Vol Música ({int(self.cfg_volume_music*100)}%):", 350),
-            (f"Dificuldade: {self.cfg_difficulty}", 410),
-            ("Mic 1 Device:", 500),
-            ("Mic 2 Device:", 550),
+            ("Monitorar (Ouvir voz):", 0),
+            ("Mostrar Ritmo:", 1),
+            (f"Vol Mic 1 ({int(self.cfg_volume_mic1*100)}%):", 2),
+            (f"Vol Mic 2 ({int(self.cfg_volume_mic2*100)}%):", 3),
+            (f"Vol Música ({int(self.cfg_volume_music*100)}%):", 4),
+            (f"Dificuldade: {self.cfg_difficulty}", 5),
+            ("Mic 1 Device:", 6),
+            ("Mic 2 Device:", 7),
         ]
         
-        for text, y in lbls:
+        for text, idx in lbls:
+            y = start_y + idx * gap_y
             s = font.render(text, True, COLOR_WHITE)
-            self.screen.blit(s, (50, y))
+            self.screen.blit(s, (col_lbl_x, y))
             
         # Draw Controls (Simulação visual)
         
         # Checkboxes
+        y_mon = start_y
         col_chk = COLOR_GREEN if self.cfg_monitoring else (100,100,100)
-        pygame.draw.rect(self.screen, col_chk, (300, 150, 20, 20))
+        pygame.draw.rect(self.screen, col_chk, (col_ctrl_x, y_mon, chk_size, chk_size))
         
+        y_rhy = start_y + gap_y
         col_chk2 = COLOR_GREEN if self.show_rhythm_indicator else (100,100,100)
-        pygame.draw.rect(self.screen, col_chk2, (300, 190, 20, 20))
+        pygame.draw.rect(self.screen, col_chk2, (col_ctrl_x, y_rhy, chk_size, chk_size))
         
         # Sliders (Linha + Bolinha)
         # Mic 1
-        pygame.draw.rect(self.screen, (100,100,100), (400, 250, 300, 5))
-        pos_x1 = 400 + (self.cfg_volume_mic1 / 2.0) * 300
-        pygame.draw.circle(self.screen, COLOR_HIGHLIGHT, (int(pos_x1), 252), 8)
+        y_m1 = start_y + 2 * gap_y
+        pygame.draw.rect(self.screen, (100,100,100), (col_ctrl_x, y_m1 + int(10*ui_scale), slider_w, line_h))
+        pos_x1 = col_ctrl_x + (self.cfg_volume_mic1 / 2.0) * slider_w
+        pygame.draw.circle(self.screen, COLOR_HIGHLIGHT, (int(pos_x1), y_m1 + int(12*ui_scale)), radius)
         
         # Mic 2
-        pygame.draw.rect(self.screen, (100,100,100), (400, 300, 300, 5))
-        pos_x2 = 400 + (self.cfg_volume_mic2 / 2.0) * 300
-        pygame.draw.circle(self.screen, COLOR_HIGHLIGHT, (int(pos_x2), 302), 8)
+        y_m2 = start_y + 3 * gap_y
+        pygame.draw.rect(self.screen, (100,100,100), (col_ctrl_x, y_m2 + int(10*ui_scale), slider_w, line_h))
+        pos_x2 = col_ctrl_x + (self.cfg_volume_mic2 / 2.0) * slider_w
+        pygame.draw.circle(self.screen, COLOR_HIGHLIGHT, (int(pos_x2), y_m2 + int(12*ui_scale)), radius)
 
         # Musica
-        pygame.draw.rect(self.screen, (100,100,100), (400, 350, 300, 5))
-        pos_x_mus = 400 + (self.cfg_volume_music) * 300
-        pygame.draw.circle(self.screen, COLOR_HIGHLIGHT, (int(pos_x_mus), 352), 8)
+        y_mus = start_y + 4 * gap_y
+        pygame.draw.rect(self.screen, (100,100,100), (col_ctrl_x, y_mus + int(10*ui_scale), slider_w, line_h))
+        pos_x_mus = col_ctrl_x + (self.cfg_volume_music) * slider_w
+        pygame.draw.circle(self.screen, COLOR_HIGHLIGHT, (int(pos_x_mus), y_mus + int(12*ui_scale)), radius)
         
         # Dificuldade (Botão)
-        pygame.draw.rect(self.screen, (50,50,150), (400, 400, 200, 30))
+        y_dif = start_y + 5 * gap_y
+        pygame.draw.rect(self.screen, (50,50,150), (col_ctrl_x, y_dif, int(200*ui_scale), btn_h_small))
         d_txt = font.render(self.cfg_difficulty.upper(), True, COLOR_WHITE)
-        self.screen.blit(d_txt, (460, 405))
+        self.screen.blit(d_txt, (col_ctrl_x + int(20*ui_scale), y_dif + int(5*ui_scale)))
         
-        # Devices (Display Name or ID)
+        # Mic 1 Sel
         def get_dev_name(idx):
             for d in self.available_devices:
                 if d['index'] == idx: return d['name'][:40]
             return "Nenhum"
-            
-        # Mic 1 Sel
-        pygame.draw.rect(self.screen, (50,50,50), (400, 500, 300, 30))
+
+        y_d1 = start_y + 6 * gap_y
+        pygame.draw.rect(self.screen, (50,50,50), (col_ctrl_x, y_d1, int(300*ui_scale), btn_h_small))
         n1 = font.render(get_dev_name(self.cfg_mic1_idx), True, COLOR_WHITE)
-        self.screen.blit(n1, (410, 505))
+        self.screen.blit(n1, (col_ctrl_x + int(10*ui_scale), y_d1 + int(5*ui_scale)))
         
         # Mic 2 Sel
-        pygame.draw.rect(self.screen, (50,50,50), (400, 550, 300, 30))
+        y_d2 = start_y + 7 * gap_y
+        pygame.draw.rect(self.screen, (50,50,50), (col_ctrl_x, y_d2, int(300*ui_scale), btn_h_small))
         n2 = font.render(get_dev_name(self.cfg_mic2_idx), True, COLOR_WHITE)
-        self.screen.blit(n2, (410, 555))
+        self.screen.blit(n2, (col_ctrl_x + int(10*ui_scale), y_d2 + int(5*ui_scale)))
         
         # VU Meters na Config para teste
         # Mic 1
-        v1 = min(150, int(self.scorer.current_volume_mic1 * 10))
-        pygame.draw.rect(self.screen, COLOR_GREEN, (720, 500, v1, 30))
+        v1 = int(min(150, int(self.scorer.current_volume_mic1 * 10)) * ui_scale)
+        pygame.draw.rect(self.screen, COLOR_GREEN, (col_ctrl_x + int(320*ui_scale), y_d1, v1, btn_h_small))
         
         # Mic 2
-        v2 = min(150, int(self.scorer.current_volume_mic2 * 10))
-        pygame.draw.rect(self.screen, COLOR_GREEN, (720, 550, v2, 30))
+        v2 = int(min(150, int(self.scorer.current_volume_mic2 * 10)) * ui_scale)
+        pygame.draw.rect(self.screen, COLOR_GREEN, (col_ctrl_x + int(320*ui_scale), y_d2, v2, btn_h_small))
 
+
+    def wrap_text(self, text, font, max_width):
+        """Quebra texto em linhas que cabem em max_width."""
+        words = text.split(' ')
+        lines = []
+        current_line = []
+        
+        for word in words:
+            test_line = ' '.join(current_line + [word])
+            w, h = font.size(test_line)
+            if w <= max_width:
+                current_line.append(word)
+            else:
+                if current_line:
+                    lines.append(' '.join(current_line))
+                    current_line = [word]
+                else:
+                    # Palavra sozinha maior que a largura (raro, mas evita loop)
+                    lines.append(word)
+                    current_line = []
+        
+        if current_line:
+            lines.append(' '.join(current_line))
+            
+        return lines
 
     def draw_centered_text(self, text, y_offset=0, size=None, color=COLOR_WHITE):
         """
-        Função auxiliar para desenhar texto centralizado.
+        Função auxiliar para desenhar texto centralizado com quebra de linha.
         """
         font = self.font_lyrics
         if size: font = pygame.font.Font(None, size)
-            
-        surface = font.render(text, True, color)
-        rect = surface.get_rect(center=(WIDTH // 2, HEIGHT // 2 + y_offset))
-        self.screen.blit(surface, rect)
+        
+        max_w = self.screen.get_width() - 100 # Margem
+        lines = self.wrap_text(text, font, max_w)
+        
+        # Calcula altura total para centralizar o bloco
+        line_height = font.get_linesize()
+        total_height = len(lines) * line_height
+        
+        start_y = (self.screen.get_height() // 2) + y_offset - (total_height // 2)
+        
+        for i, line in enumerate(lines):
+            surface = font.render(line, True, color)
+            rect = surface.get_rect(center=(self.screen.get_width() // 2, start_y + i * line_height))
+            self.screen.blit(surface, rect)
 
     def run(self):
         """Loop principal com tratamento de falhas."""
@@ -726,6 +1146,17 @@ class KaraokePlayer:
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         running = False
+                    elif event.type == pygame.VIDEORESIZE:
+                         # Atualiza display surface
+                         self.screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
+                         
+                         # Calcula nova escala baseada na altura (768p base)
+                         scale = event.h / 768.0
+                         # Limita escala minima para não ficar ilegível
+                         scale = max(0.8, scale)
+                         
+                         self.init_fonts(scale)
+                         self.render_background() # Regenera background na nova resolução (mantendo cores)
                     self.handle_input(event)
 
                 self.update()
