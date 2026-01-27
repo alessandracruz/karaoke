@@ -213,6 +213,10 @@ class KaraokePlayer:
 
         self.queue = []
         self.input_buffer = ""
+        
+        # New State Flags
+        self.paused = False
+        self.show_help = False
 
         self.state = "MENU" # MENU, PLAYING, SCORE, CONFIG
         self.background = None
@@ -248,6 +252,25 @@ class KaraokePlayer:
         self.font_lyrics = pygame.font.Font(None, int(FONT_SIZE_LYRICS * scale))
         self.font_info = pygame.font.Font(None, int(FONT_SIZE_INFO * scale))
         self.font_small = pygame.font.Font(None, int(20 * scale))
+
+    def draw_text_with_outline(self, text, font, color, center_pos, outline_color=(0,0,0), outline_width=2):
+        """Desenha texto centralizado com borda (outline). Retorna Rect."""
+        cx, cy = center_pos
+        # Renderiza texto principal
+        surf = font.render(text, True, color)
+        rect = surf.get_rect(center=(cx, cy))
+        
+        # Desenha outline (8 direções simples)
+        for dx in [-outline_width, 0, outline_width]:
+             for dy in [-outline_width, 0, outline_width]:
+                 if dx != 0 or dy != 0:
+                     out_surf = font.render(text, True, outline_color)
+                     out_rect = out_surf.get_rect(center=(cx + dx, cy + dy))
+                     self.screen.blit(out_surf, out_rect)
+        
+        # Blit main text
+        self.screen.blit(surf, rect)
+        return rect
 
     def load_bg_images(self):
         """Carrega caminhos de imagens da pasta backgrounds."""
@@ -364,103 +387,7 @@ class KaraokePlayer:
 
     # ... (other methods maintained but skipped in replacement for brevity if unchanged)
 
-    def draw(self):
-        """Renderização."""
-        W, H = self.screen.get_width(), self.screen.get_height()
-        
-        # Fundo
-        if self.state == "CONFIG":
-             self.screen.fill((20, 20, 30)) # Fundo escuro tecnico
-        else:
-            if self.background: 
-                # Se mudou resolução, re-renderiza para ficar HD
-                if self.background.get_size() != (W, H):
-                    self.render_background()
-                self.screen.blit(self.background, (0,0))
-            
-            # Overlay otimizado
-            if hasattr(self, 'overlay'):
-                 self.screen.blit(self.overlay, (0,0))
 
-        if self.state == "MENU":
-            self.draw_centered_text("SISTEMA DE KARAOKÊ", -100, color=COLOR_HIGHLIGHT)
-            self.draw_centered_text("Digite o código e ENTER para adicionar à fila", -50)
-            self.draw_centered_text("[C] para Configurar Áudio / Microfone", 0, size=30, color=COLOR_BLUE)
-            
-            self.draw_centered_text(f"Fila: {', '.join(self.queue)}", 80)
-            
-            # Instrução visual substitui lista antiga
-            self.draw_centered_text("Consulte o catálogo físico ou app", 200, color=(150,150,150))
-
-            input_surf = self.font_info.render(f"Entrada: {self.input_buffer}", True, COLOR_HIGHLIGHT)
-            self.screen.blit(input_surf, (50, H - 50))
-
-        elif self.state == "PLAYING":
-            t_type = getattr(self, 'current_track_type', 'instrumental')
-            type_label = "INSTRUMENTAL" if t_type == 'instrumental' else "VOCAL"
-            
-            # Lyrics Type Label
-            l_label = "N/A"
-            if hasattr(self, 'lyrics_files') and self.lyrics_files:
-                l_type = self.lyrics_files[self.current_lyrics_index]['type']
-                l_label = l_type.upper() # LRC, V1, V2
-            
-            info_text = f"{self.current_song['title']} - {self.current_song['artist']} [{type_label}] [Lyrics: {l_label}]"
-            surf = self.font_info.render(info_text, True, COLOR_HIGHLIGHT)
-            self.screen.blit(surf, (20, 20))
-
-            # Letras
-            current_time = self.get_current_time()
-            
-            # Lógica para mostrar intro/proxima se linha for -1
-            render_idx = self.current_line_index
-            if render_idx == -1:
-                # Se ainda não começou, tenta mostrar a primeira linha
-                if self.lyrics:
-                     # Checa se é apenas introdução
-                     first_line_start = self.lyrics[0]['time']
-                     if current_time < first_line_start:
-                         time_to_start = (first_line_start - current_time) / 1000
-                         if time_to_start < 10: # Mostra se falta menos de 10s
-                             render_idx = 0
-                             self.draw_centered_text(f"Próxima...", -80, 24, (150,150,150))
-                         else:
-                             self.draw_centered_text("INTRODUÇÃO", 0, 60, COLOR_HIGHLIGHT)
-
-            if render_idx != -1 and render_idx < len(self.lyrics):
-                line_data = self.lyrics[render_idx]
-                if 'words' in line_data: self.draw_karaoke_line(line_data, current_time, -40) 
-                else: self.draw_centered_text(line_data['text'], -40, 50, COLOR_HIGHLIGHT)
-
-            # Proxima linha (Preview)
-            # Se render_idx == -1 (intro), proxima é a 0. Se != -1, proxima é render_idx + 1
-            next_idx = render_idx + 1 if render_idx != -1 else 0
-            
-            if next_idx < len(self.lyrics):
-                line_data = self.lyrics[next_idx]
-                if 'words' in line_data: self.draw_karaoke_line(line_data, current_time, 40) 
-                else: self.draw_centered_text(line_data['text'], 40, 30, (200,200,200)) 
-
-            # HUD Futurista (VU Meter e Ritmo)
-            self.draw_vu_meter_hud()
-            if self.show_rhythm_indicator:
-                self.draw_rhythm_indicator_hud()
-            
-            self.draw_ui_progress()
-
-            if self.input_buffer:
-                input_surf = self.font_info.render(f"Add Fila: {self.input_buffer}", True, COLOR_WHITE)
-                self.screen.blit(input_surf, (20, H - 40))
-
-        elif self.state == "SCORE":
-            self.draw_centered_text("MÚSICA FINALIZADA", -50)
-            self.draw_centered_text(f"Sua Pontuação: {self.score_result}/100", 20, 80, COLOR_HIGHLIGHT)
-            self.draw_centered_text("Pressione ENTER para continuar", 100, 30)
-
-        elif self.state == "CONFIG":
-            self.draw_config_screen()
-
-        pygame.display.flip()
 
     def parse_lrc(self, lrc_path):
         """
@@ -640,6 +567,61 @@ class KaraokePlayer:
         except Exception as e:
             print(f"Erro ao alternar áudio: {e}")
 
+    def toggle_pause(self):
+        """Pausa ou resume a música."""
+        if self.state != "PLAYING": return
+
+        self.paused = not self.paused
+        if self.paused:
+            pygame.mixer.music.pause()
+            self.scorer.set_paused(True) # Pause audio processing
+        else:
+            pygame.mixer.music.unpause()
+            self.scorer.set_paused(False) # Resume audio processing
+
+    def draw_help_screen(self):
+        """Desenha overlay de ajuda."""
+        W, H = self.screen.get_width(), self.screen.get_height()
+        ui_scale = H / 768.0
+        
+        # Overlay Background
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 200)) # 80% opacity black
+        self.screen.blit(overlay, (0, 0))
+        
+        # Title
+        self.draw_centered_text("COMANDOS DO KARAOKÊ", int(-200 * ui_scale), size=int(40 * ui_scale), color=COLOR_HIGHLIGHT)
+        
+        # Commands List
+        commands = [
+            ("ENTER", "Adicionar música (Menu)"),
+            ("ESPAÇO", "Pausar / Retomar"),
+            ("SETAS ESQ/DIR", "Retroceder / Avançar 10s"),
+            ("L", "Trocar Tipo de Legenda (LRC/V1/V2)"),
+            ("V", "Trocar Faixa de Áudio (Original/Instrumental)"),
+            ("C", "Configurações (Audio/Video/Mic)"),
+            ("H / F1", "Mostrar/Esconder esta ajuda"),
+            ("ESC", "Voltar / Sair da Ajuda")
+        ]
+        
+        start_y = int(200 * ui_scale)
+        gap_y = int(40 * ui_scale)
+        
+        for i, (key, desc) in enumerate(commands):
+            y_pos = start_y + i * gap_y
+            # Draw Key (Left aligned relative to center-ish)
+            key_surf = self.font_info.render(key, True, COLOR_HIGHLIGHT)
+            desc_surf = self.font_info.render(desc, True, COLOR_WHITE)
+            
+            # Align them nicely
+            key_x = W // 2 - int(250 * ui_scale)
+            desc_x = W // 2 - int(100 * ui_scale)
+            
+            self.screen.blit(key_surf, (key_x, y_pos))
+            self.screen.blit(desc_surf, (desc_x, y_pos))
+
+
+
     def apply_audio_config(self):
         """Envia configurações da UI para o backend de áudio (Scorer)."""
         self.scorer.set_config(
@@ -679,7 +661,9 @@ class KaraokePlayer:
                     self.input_buffer = "" # Limpa buffer ao entrar config
 
             elif self.state == "PLAYING":
-                if event.key == pygame.K_v:
+                if event.key == pygame.K_SPACE:
+                     self.toggle_pause()
+                elif event.key == pygame.K_v:
                     self.toggle_audio_track()
                 elif event.key == pygame.K_l:
                     self.switch_lyrics()
@@ -698,6 +682,8 @@ class KaraokePlayer:
                     self.input_buffer = self.input_buffer[:-1]
                 elif event.unicode.isnumeric():
                     self.input_buffer += event.unicode
+                elif event.key == pygame.K_h or event.key == pygame.K_F1:
+                    self.show_help = not self.show_help
 
             elif self.state == "SCORE":
                 if event.key == pygame.K_RETURN:
@@ -707,6 +693,16 @@ class KaraokePlayer:
                 if event.key == pygame.K_ESCAPE or event.key == pygame.K_c:
                     self.state = "MENU" # Voltar
                 pass
+            
+            # Global Toggle Help (if not playing or config might override)
+            if self.state == "MENU":
+                 if event.key == pygame.K_h or event.key == pygame.K_F1:
+                    self.show_help = not self.show_help
+             
+            if self.show_help and event.key == pygame.K_ESCAPE:
+                self.show_help = False
+            
+
         
         if event.type == pygame.MOUSEBUTTONDOWN and self.state == "CONFIG":
             x, y = event.pos
@@ -812,7 +808,18 @@ class KaraokePlayer:
     def update(self):
         """Loop lógico."""
         if self.state == "PLAYING":
+            # Check for forced stop/skip first
+            if getattr(self, 'skip_requested', False):
+                self.skip_requested = False
+                self.finish_song()
+                return
+
+            if self.paused:
+                return # Skip logic update if paused
+
             if not pygame.mixer.music.get_busy():
+                # Double check to prevent accidental finish if just buffer lag
+                # But mostly fine.
                 self.finish_song()
                 return
             
@@ -824,14 +831,16 @@ class KaraokePlayer:
                 if current_time >= line['time'] - 200: found_index = i
                 else: break
             
-            # Paginação
+            # Paginação (Cascading Page Flip)
             if not hasattr(self, 'page_index'): self.page_index = 0
-            if self.page_index + 1 < len(self.lyrics):
-                line_end = self.lyrics[self.page_index + 1].get('end_time', self.lyrics[self.page_index + 1]['time'] + 5000)
-                if current_time > line_end: self.page_index += 2
-            elif self.page_index < len(self.lyrics):
-                 line_end = self.lyrics[self.page_index].get('end_time', self.lyrics[self.page_index]['time'] + 5000)
-                 if current_time > line_end: self.page_index += 2
+            
+            if self.page_index < len(self.lyrics):
+                 line = self.lyrics[self.page_index]
+                 line_end = line.get('end_time', line['time'] + 5000)
+                 
+                 # Only advance if we have passed the end time (Immediate flip)
+                 if current_time > line_end:
+                     self.page_index += 1
 
             self.current_line_index = found_index
             
@@ -843,6 +852,25 @@ class KaraokePlayer:
                 self.scorer.set_singing_segment(in_segment)
             else:
                  self.scorer.set_singing_segment(False)
+
+        elif self.state == "SCORE":
+            # Auto-advance after 10 seconds or if skip requested
+            time_elapsed = time.time() - getattr(self, 'score_start_time', 0)
+            
+            # Check for API Skip request during Score screen
+            if getattr(self, 'skip_requested', False):
+                self.skip_requested = False
+                time_elapsed = 999 # Force advance
+                
+            if time_elapsed > 10:
+                if self.queue:
+                     next_song = self.queue.pop(0)
+                     self.start_song(next_song)
+                     self.page_index = 0
+                     self.current_track_type = 'instrumental'
+                     self.current_offset_ms = 0
+                else:
+                     self.state = "MENU"
 
         elif self.state == "MENU":
             if self.queue:
@@ -859,6 +887,8 @@ class KaraokePlayer:
         self.scorer.stop_streams() # Fecha streams agora que está pausado
         self.score_result = self.scorer.get_score()
         self.state = "SCORE"
+        self.score_start_time = time.time()
+        self.paused = False # Reset pause state
 
     def draw(self):
         """Renderização."""
@@ -898,35 +928,131 @@ class KaraokePlayer:
             self.screen.blit(input_surf, (50, H - 50))
 
         elif self.state == "PLAYING":
-            t_type = getattr(self, 'current_track_type', 'instrumental')
-            type_label = "INSTRUMENTAL" if t_type == 'instrumental' else "VOCAL"
-            
-            # Lyrics Type Label
-            l_label = "N/A"
-            if hasattr(self, 'lyrics_files') and self.lyrics_files:
-                l_type = self.lyrics_files[self.current_lyrics_index]['type']
-                l_label = l_type.upper() # LRC, V1, V2
-            
-            if self.current_song:
-                info_text = f"{self.current_song['title']} - {self.current_song['artist']} [{type_label}] [Lyrics: {l_label}]"
-                surf = self.font_info.render(info_text, True, COLOR_HIGHLIGHT)
-                self.screen.blit(surf, (20, 20))
-            else:
-                self.state = "MENU" # Fallback if song data is missing
-                return
+            # --- RENDERIZAÇÃO KARAOKE REFINADA ---
+            W, H = self.screen.get_width(), self.screen.get_height()
+            ui_scale = H / 768.0
 
-
-            # Letras
+            # 1. LAYOUT DEFINITIONS
+            # Active Line: Center (45%)
+            # Next Line: Immediately below (53%)
+            active_y = int(H * 0.45)
+            next_y = int(H * 0.53)
+            
             current_time = self.get_current_time()
+            
+            # 2. TITLE CARD (0s - 5s)
+            if current_time < 5000 and self.current_song:
+                alpha = 255
+                if current_time > 4000: # Fade out last second
+                    alpha = int(255 * (1 - (current_time - 4000)/1000.0))
+                
+                if alpha > 10:
+                    # Create a surface for the Title Card to handle Alpha
+                    title_surf = pygame.Surface((W, 200), pygame.SRCALPHA)
+                    title = self.current_song.get('title', '')
+                    artist = self.current_song.get('artist', '')
+                    
+                    # Layout: Title at 18%, Lyrics at 45%
+                    # Use LARGER font for Title (font_lyrics is biggest)
+                    title_y = int(H * 0.18)
+                    artist_y = int(H * 0.25)
+                    
+                    self.draw_text_with_outline(title, self.font_lyrics, COLOR_HIGHLIGHT, (W//2, title_y))
+                    self.draw_text_with_outline(artist, self.font_info, COLOR_WHITE, (W//2, artist_y))
+
+            # 3. CUE DOTS (4s Countdown)
+            next_start = None
+            if hasattr(self, 'page_index') and self.page_index < len(self.lyrics):
+                 next_start = self.lyrics[self.page_index]['time']
+            
+            if next_start:
+                 time_to = (next_start - current_time) / 1000.0
+                 if 0 < time_to <= 4.0:
+                     # Check layout validity
+                     is_valid_gap = (self.page_index == 0) # Prioritize intro
+                     if not is_valid_gap and self.page_index > 0:
+                         prev_end = self.lyrics[self.page_index-1].get('end_time', 0)
+                         if (next_start - prev_end) > 6000: is_valid_gap = True
+                     
+                     if is_valid_gap:
+                         dot_radius = int(10 * ui_scale)
+                         dot_spacing = int(40 * ui_scale)
+                         start_x = W//2 - (1.5 * dot_spacing)
+                         y_dots = active_y - int(60 * ui_scale)
+                         
+                         for i in range(4): # 0, 1, 2, 3
+                             cx = int(start_x + i * dot_spacing)
+                             # Time mapping: 4.0->0, 3.0->1, 2.0->2, 1.0->3
+                             # i=0 lit if time <= 4.0? No, that's always.
+                             # Reverse logic:
+                             # 4.0 - 3.0: 1st dot (i=0) ONLY? Or 1st dot fills?
+                             # Let's do: 
+                             # 4s -> 0 lit
+                             # 3s -> 0,1 lit
+                             # 2s -> 0,1,2 lit
+                             # 1s -> 0,1,2,3 lit
+                             
+                             threshold = 4.0 - i
+                             # Example: T=3.5. 3.5 <= 4.0 (0=True). 3.5 <= 3.0 (1=False).
+                             # So at 3.5s (start of count), only 1st dot is set. Correct.
+                             
+                             is_lit = time_to <= threshold
+                             
+                             # Draw Empty Circle (Stroke)
+                             pygame.draw.circle(self.screen, (255,255,255), (cx, y_dots), dot_radius, 2)
+                             
+                             if is_lit:
+                                 color = COLOR_BLUE if i < 3 else COLOR_RED
+                                 pygame.draw.circle(self.screen, color, (cx, y_dots), dot_radius - 2)
+
+            # 4. DRAW LYRICS LINES
+            # Current Line (Active) - Top
             if hasattr(self, 'page_index') and self.page_index < len(self.lyrics):
                 line_data = self.lyrics[self.page_index]
-                if 'words' in line_data: self.draw_karaoke_line(line_data, current_time, -40) 
-                else: self.draw_centered_text(line_data['text'], -40, 50, COLOR_HIGHLIGHT)
+                
+                # Check visibility: Hide if finished for > 1s
+                # AND Hide if it starts too far in future (Instrumental Break)
+                end_t = line_data.get('end_time', line_data['time'] + 5000)
+                
+                # Default visibility: 8s before start
+                vis_threshold = 8000
+                
+                # Check if it's a long intro/break
+                if self.page_index == 0:
+                     vis_threshold = 4000 # Intro strict
+                elif self.page_index > 0:
+                     prev_end = self.lyrics[self.page_index-1].get('end_time', 0)
+                     if (line_data['time'] - prev_end) > 8000:
+                         vis_threshold = 4000 # Instrumental strict (sync with dots)
 
+                is_time_to_show = (line_data['time'] - current_time <= vis_threshold)
+                has_not_ended = (current_time <= end_t + 1000)
+                
+                if has_not_ended and is_time_to_show:
+                    if 'words' in line_data: 
+                        self.draw_karaoke_line(line_data, current_time, active_y, is_active=True) 
+                    else: 
+                         self.draw_text_with_outline(line_data['text'], self.font_lyrics, COLOR_HIGHLIGHT, (W//2, active_y))
+
+            # Next Line (Preview) - Bottom
             if hasattr(self, 'page_index') and self.page_index + 1 < len(self.lyrics):
                 line_data = self.lyrics[self.page_index + 1]
-                if 'words' in line_data: self.draw_karaoke_line(line_data, current_time, 40) 
-                else: self.draw_centered_text(line_data['text'], 40, 30, (200,200,200)) 
+                
+                # Determine visibility threshold
+                # If it's a long gap (Instrumental), show only when dots appear (4s).
+                # Otherwise, show early (8s) for reading.
+                vis_threshold = 8000
+                if hasattr(self, 'page_index') and self.page_index >= 0:
+                     curr_end = self.lyrics[self.page_index].get('end_time', 0)
+                     gap = line_data['time'] - curr_end
+                     if gap > 8000: vis_threshold = 4000 # Sync with dots for instrumental
+                
+                # Check visibility
+                if line_data['time'] - current_time <= vis_threshold:
+                    if 'words' in line_data: 
+                        self.draw_karaoke_line(line_data, current_time, next_y, is_active=False) 
+                    else: 
+                        self.draw_text_with_outline(line_data['text'], self.font_lyrics, (200,200,200), (W//2, next_y))
 
             # HUD Futurista (VU Meter e Ritmo)
             self.draw_vu_meter_hud()
@@ -939,20 +1065,39 @@ class KaraokePlayer:
                 input_surf = self.font_info.render(f"Add Fila: {self.input_buffer}", True, COLOR_WHITE)
                 self.screen.blit(input_surf, (20, H - 40))
 
+            # Instrumental Progress
+            if next_start and current_time < next_start:
+                 gap = next_start - current_time
+                 if gap > 8000 and self.page_index > 0: # Only if not intro
+                      self.draw_text_with_outline("INSTRUMENTAL", self.font_info, (100,200,255), (W//2, H//2))
+
         elif self.state == "SCORE":
             self.draw_centered_text("MÚSICA FINALIZADA", -50)
             self.draw_centered_text(f"Sua Pontuação: {self.score_result}/100", 20, 80, COLOR_HIGHLIGHT)
-            self.draw_centered_text("Pressione ENTER para continuar", 100, 30)
+            
+            # Timer Countdown
+            if hasattr(self, 'score_start_time'):
+                remaining = max(0, 10 - int(time.time() - self.score_start_time))
+                self.draw_centered_text(f"Próxima em {remaining}s...", 150, 24, (150,150,150))
+
+            self.draw_centered_text("Pressione ENTER para continuar", 200, 30)
 
         elif self.state == "CONFIG":
             self.draw_config_screen()
 
+        # Draw Overlays at the very end
+        if self.paused:
+            self.draw_centered_text("PAUSADO", 0, size=80, color=COLOR_RED)
+            
+        if self.show_help:
+            self.draw_help_screen()
+
         pygame.display.flip()
 
-    def draw_karaoke_line(self, line_data, current_time, y_offset=0):
+    def draw_karaoke_line(self, line_data, current_time, center_y, is_active=True):
         """
-        Desenha uma linha de karaokê, quebrando em múltiplas linhas se necessário,
-        mantendo o destaque sincronizado palavra por palavra.
+        Desenha linha de karaokê com Wipe (Máscara) e Outlines.
+        center_y: Y absoluto central.
         """
         words = line_data.get('words', [])
         if not words: return
@@ -960,14 +1105,11 @@ class KaraokePlayer:
         W, H = self.screen.get_width(), self.screen.get_height()
         ui_scale = H / 768.0
         
-        # Escala o y_offset recebido (que é base 768p)
-        scaled_offset = int(y_offset * ui_scale)
-
         space_width = self.font_lyrics.size(" ")[0]
         margin = int(100 * ui_scale)
-        max_width = W - margin # Margem proporcional
+        max_width = W - margin
         
-        # 1. Agrupar palavras em linhas visuais
+        # 1. Agrupar em linhas visuais
         visual_lines = []
         current_line_words = []
         current_line_width = 0
@@ -976,8 +1118,6 @@ class KaraokePlayer:
             word_txt = w['display']
             word_surf_w = self.font_lyrics.size(word_txt)[0]
             
-            # Se a palavra sozinha já estoura e é a primeira da linha, entra assim mesmo
-            # Se não é a primeira, quebra linha antes
             if current_line_width + word_surf_w > max_width and current_line_words:
                 visual_lines.append(current_line_words)
                 current_line_words = []
@@ -989,42 +1129,112 @@ class KaraokePlayer:
         if current_line_words:
             visual_lines.append(current_line_words)
             
-        # 2. Calcular geometria vertical para centralizar o bloco
+        # 2. Geometria Vertical
         line_height = self.font_lyrics.get_linesize()
         total_block_height = len(visual_lines) * line_height
         
-        # Centraliza o bloco em relação ao y_offset (que é relativo ao centro da tela)
-        center_y = (H // 2) + scaled_offset
         start_y = center_y - (total_block_height // 2)
-        
-        # 3. Desenhar cada linha
         current_y = start_y
+        
+        # Cores
+        inactive_color = (200, 200, 200) # Cinza claro
+        if not is_active:
+             inactive_color = (100, 100, 100) # Cinza escuro se for preview
+        
+        active_color = COLOR_HIGHLIGHT # Dourado
+        outline_color = (0, 0, 0)
+        
+        # 3. Desenhar
         for v_line in visual_lines:
-            # Calcula largura total desta linha para centralizar horizontalmente
+            # Largura total para centralizar
             line_w = 0
             for w in v_line:
                 line_w += self.font_lyrics.size(w['display'])[0] + space_width
-            line_w -= space_width # remove ultimo espaco
+            line_w -= space_width
             
-            start_x = (self.screen.get_width() - line_w) // 2
+            start_x = (W - line_w) // 2
             current_x = start_x
             
+            # Para cada palavra, renderizar Base + Wipe
             for w in v_line:
                 txt = w['display']
+                w_w, w_h = self.font_lyrics.size(txt)
                 
-                # Lógica de cor
-                if current_time >= w['end_ms']: 
-                    color = COLOR_HIGHLIGHT # Já passou
-                elif current_time >= w['start_ms']: 
-                    color = (255, 100, 100) # Cantando agora
-                else: 
-                    color = (200, 200, 200) # Futuro
+                # A. Base (Inactive) com Outline
+                # Desenha outline em loop
+                for dx in [-2, 0, 2]:
+                    for dy in [-2, 0, 2]:
+                        if dx!=0 or dy!=0:
+                            s_out = self.font_lyrics.render(txt, True, outline_color)
+                            self.screen.blit(s_out, (current_x + dx, current_y + dy))
                 
-                s = self.font_lyrics.render(txt, True, color)
-                self.screen.blit(s, (current_x, current_y))
-                current_x += s.get_width() + space_width
+                # Inactive Fill
+                s_inact = self.font_lyrics.render(txt, True, inactive_color)
+                self.screen.blit(s_inact, (current_x, current_y))
+                
+                # B. Active Wipe (Se for a linha ativa)
+                if is_active:
+                    # Calcula % de preenchimento
+                    # Se passou do fim: 100%
+                    # Se antes do inicio: 0%
+                    # No meio: interpola
+                    
+                    fill_pct = 0.0
+                    if current_time >= w['end_ms']:
+                        fill_pct = 1.0
+                    elif current_time > w['start_ms']:
+                        duration = w['end_ms'] - w['start_ms']
+                        if duration > 0:
+                            fill_pct = (current_time - w['start_ms']) / duration
+                    
+                    if fill_pct > 0:
+                        # Renderiza Active Surface
+                        s_act = self.font_lyrics.render(txt, True, active_color)
+                        
+                        # Cria Rect de recorte
+                        # Queremos blitar s_act sobre s_inact, mas apenas os primeiros (width * fill_pct) pixels
+                        fill_width = int(w_w * fill_pct)
+                        if fill_width > 0:
+                            area = pygame.Rect(0, 0, fill_width, w_h)
+                            self.screen.blit(s_act, (current_x, current_y), area)
+                
+                current_x += w_w + space_width
             
             current_y += line_height
+        
+    def draw_countdown_indicator(self, remaining_sec):
+        """Desenha um indicador circular de contagem regressiva."""
+        W, H = self.screen.get_width(), self.screen.get_height()
+        ui_scale = H / 768.0
+        
+        center_x = W // 2
+        center_y = H // 2 - int(100 * ui_scale) # Um pouco acima do centro
+        radius = int(40 * ui_scale)
+        
+        # Texto
+        seconds = int(remaining_sec) + 1
+        text = f"{seconds}"
+        
+        # Cor varia: Amarelo -> Vermelho
+        color = (255, 255, 0)
+        if seconds <= 2: color = (255, 50, 50)
+        
+        # Círculo de fundo
+        pygame.draw.circle(self.screen, (50, 50, 50), (center_x, center_y), radius)
+        pygame.draw.circle(self.screen, color, (center_x, center_y), radius, width=int(3*ui_scale))
+        
+        # Texto número
+        txt_surf = self.font_info.render(text, True, color)
+        txt_rect = txt_surf.get_rect(center=(center_x, center_y))
+        self.screen.blit(txt_surf, txt_rect)
+        
+        # Label "PREPARE-SE"
+        lbl_surf = self.font_info.render("PRÓXIMA FRASE", True, (200,200,200))
+        lbl_rect = lbl_surf.get_rect(center=(center_x, center_y - radius - int(20 * ui_scale)))
+        self.screen.blit(lbl_surf, lbl_rect)
+        
+
+
 
     def draw_vu_meter_hud(self):
         """Desenha um VU Meter visual no canto inferior direito."""

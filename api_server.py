@@ -1,7 +1,7 @@
 import threading
 import json
 import logging
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import os
 
@@ -25,6 +25,74 @@ class KaraokeAPI:
         self.app.add_url_rule('/api/queue/add', 'add_to_queue', self.add_to_queue, methods=['POST'])
         self.app.add_url_rule('/api/player/<action>', 'player_control', self.player_control, methods=['POST'])
         self.app.add_url_rule('/api/song/<int:song_id>/lyrics', 'get_lyrics', self.get_lyrics, methods=['GET'])
+        
+        # Static media serving
+        # Assuming we run from 'E:\karaoke\karaoke', songs are in 'songs/'
+        self.SONGS_DIR = os.path.join(os.getcwd(), 'songs')
+        self.app.add_url_rule('/media/<path:filename>', 'serve_media', self.serve_media, methods=['GET'])
+
+    def serve_media(self, filename):
+        """Serves files from the songs directory."""
+        return send_from_directory(self.SONGS_DIR, filename)
+
+    def _generate_urls(self, song_data):
+        """Generates full URLs for song assets."""
+        host = request.host_url.rstrip('/')
+        
+        # Helper to convert absolute path to relative 'songs/...' path for URL
+        def to_url_path(abs_path):
+            if not abs_path: return None
+            # Normalize paths
+            norm_abs = os.path.normpath(os.path.abspath(abs_path))
+            norm_root = os.path.normpath(self.SONGS_DIR)
+            
+            is_match = False
+            if os.name == 'nt':
+                # Windows is case-insensitive
+                if norm_abs.lower().startswith(norm_root.lower()):
+                    is_match = True
+            else:
+                if norm_abs.startswith(norm_root):
+                    is_match = True
+            
+            if is_match:
+                # Calculate relative path safely
+                # os.path.relpath handles '..' if outside, but we checked startswith
+                # simpler: slice if we are sure, but relpath is safer
+                rel = os.path.relpath(norm_abs, norm_root)
+                return f"{host}/media/{rel.replace(os.path.sep, '/')}"
+            return None
+
+        # Resolve paths
+        # path -> normally instrumental or audio root
+        # We need specific files: instrumental.mp3, original.mp3, lyrics_v1.json, lyrics.lrc
+        
+        # Try to deduce folder from known path
+        base_folder = None
+        if song_data.get('path'):
+            if os.path.isfile(song_data['path']):
+                base_folder = os.path.dirname(song_data['path'])
+            else:
+                base_folder = song_data['path']
+        
+        if not base_folder: return song_data
+
+        song_data['url_instrumental'] = to_url_path(os.path.join(base_folder, 'instrumental.mp3'))
+        song_data['url_original'] = to_url_path(os.path.join(base_folder, 'original.mp3'))
+        
+        # Lyrics V1 JSON
+        json_path = song_data.get('lyrics_file')
+        if not json_path: json_path = os.path.join(base_folder, 'lyrics_v1.json')
+        song_data['url_lyrics_json'] = to_url_path(json_path)
+
+        # LRC
+        lrc_path = os.path.join(base_folder, 'lyrics.lrc') # Standard naming?
+        # Check if exists? For URL gen, maybe just gen it.
+        # But let's check existence to be nice if possible, or just generate.
+        # Checking existence is slow for list. Let's just generate standard paths.
+        song_data['url_lyrics_lrc'] = to_url_path(lrc_path)
+        
+        return song_data
 
     def start(self):
         """Starts the Flask server in a separate daemon thread."""
@@ -47,7 +115,37 @@ class KaraokeAPI:
         """Returns the list of songs in the library."""
         try:
             songs = self.player.library.get_all_songs()
-            return jsonify({'count': len(songs), 'songs': songs})
+            # Enrich with URLs (might be slow for many songs? - optimizing: do minimal path calc)
+            # For get_all_songs, 'path' might not be fully populated in the dict returned by library?
+            # Library.get_all_songs returns {id, code, title, artist}. NO PATH.
+            # We need to fetch details or update library.get_all_songs to include path?
+            # Or just return basic info here. User asked for URLs in library too.
+            # We'll need to fetch path.
+            
+            enrich_songs = []
+            for s in songs:
+                 # We need path to generate URLs.
+                 # Optimization: library should provide relative path or folder code.
+                 # Assuming songs are stored as 'songs/<id>/'
+                 # We can construct path manually if we trust the structure.
+                 s_id = s['id']
+                 # Reconstruct standard path: songs/{id}
+                 # CAUTION: ID logic differs. db ID vs folder name.
+                 # Previously: defined as str(row['id'])
+                 
+                 # Let's peek at library logic or just instantiate path.
+                 # Easiest: call library.get_song for full details? Too slow for loop.
+                 # Best check: modify get_all_songs to return path?
+                 # Hack for now: assume standard 'songs/<id>' structure if standard.
+                 
+                 # Better: Use the 'code' or 'id' to guess.
+                 # Actually, get_song checks 'songs/str(id)'.
+                 
+                 folder = os.path.join(self.SONGS_DIR, str(s_id))
+                 s['path'] = folder # Fake path for generator
+                 enrich_songs.append(self._generate_urls(s))
+
+            return jsonify({'count': len(enrich_songs), 'songs': enrich_songs})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
@@ -59,13 +157,14 @@ class KaraokeAPI:
                 return jsonify({'error': 'Song not found'}), 404
             
             song_data = {
-                'id': getattr(song, 'id', song_id),
-                'title': getattr(song, 'title', "Unknown"),
-                'artist': getattr(song, 'artist', "Unknown"),
-                'path': getattr(song, 'path', ""),
-                'lyrics_file': getattr(song, 'lyrics_file', None),
-                'audio_file': getattr(song, 'audio_file', None),
+                'id': song.get('id', song_id),
+                'title': song.get('title', "Unknown"),
+                'artist': song.get('artist', "Unknown"),
+                'path': song.get('path', ""),
+                'lyrics_file': song.get('lyrics_file', None),
+                'audio_file': song.get('audio_file', None),
             }
+            song_data = self._generate_urls(song_data)
             return jsonify(song_data)
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -143,12 +242,23 @@ class KaraokeAPI:
         try:
             if action == 'play':
                 if hasattr(self.player, 'paused') and self.player.paused:
-                    self.player.paused = False
-                    # Update start time for proper syncing might be needed in player loop
+                    # Resume if paused
+                    if hasattr(self.player, 'toggle_pause'):
+                        self.player.toggle_pause()
+                    else:
+                        self.player.paused = False
             
             elif action == 'pause':
-                if hasattr(self.player, 'paused'):
-                    self.player.paused = True
+                 if hasattr(self.player, 'paused') and not self.player.paused:
+                    # Pause if playing
+                    if hasattr(self.player, 'toggle_pause'):
+                        self.player.toggle_pause()
+                    else:
+                        self.player.paused = True
+
+            elif action == 'toggle_pause':
+                 if hasattr(self.player, 'toggle_pause'):
+                     self.player.toggle_pause()
             
             elif action == 'next':
                 self.player.skip_requested = True 
