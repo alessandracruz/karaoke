@@ -5,3 +5,6 @@ songs/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Local datasets / downloads
+downloads/
