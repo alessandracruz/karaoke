@@ -1,10 +1,41 @@
 # arquivos gerados localmente
 library.json
-songs/
-.venv/
-__pycache__/
-*.pyc
-.DS_Store
+karaoke.db
 
-# Local datasets / downloads
+# dados locais
+songs/
 downloads/
+
+# python env
+.venv/
+venv/
+ENV/
+.env
+
+# python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# testes e linters
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# logs
+*.log
+
+# macos/windows
+.DS_Store
+Thumbs.db
+
+# editor/ide
+.vscode/
+.idea/
+
+# build artifacts (futuro)
+dist/
+build/
+node_modules/
